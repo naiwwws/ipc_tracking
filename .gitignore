@@ -1,0 +1,5 @@
+/target
+*.json
+*.txt
+/setup
+/data

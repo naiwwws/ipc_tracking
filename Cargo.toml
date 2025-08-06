@@ -1,0 +1,117 @@
+[package]
+name = "ipc_dev_rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "Memory-optimized IPC flow measurement system"
+license = "MIT"
+repository = "https://github.com/your-repo/ipc_dev_rust"
+keywords = ["modbus", "flowmeter", "embedded", "ipc"]
+categories = ["embedded", "hardware-support"]
+exclude = [
+    "docs/*",
+    "examples/*", 
+    "tests/*",
+    "benches/*",
+    ".git*",
+    "*.md"
+]
+
+# NEW: Optimization settings for embedded systems
+[profile.release]
+opt-level = "s"          # Optimize for size instead of speed
+lto = true              # Enable Link Time Optimization
+codegen-units = 1       # Better optimization, slower compile
+panic = "abort"         # Smaller binary, faster panic handling
+strip = true            # Remove debug symbols from binary
+overflow-checks = false # Disable overflow checks in release
+
+[profile.dev]
+opt-level = 1           # Some optimization in debug builds
+overflow-checks = true  # Keep overflow checks in debug
+
+# NEW: Features to reduce unnecessary dependencies
+[features]
+default = ["sqlite", "websocket", "api"]
+sqlite = ["sqlx"]
+websocket = ["tokio-tungstenite", "futures-util"]
+api = ["actix-web"]
+minimal = []            # Minimal build without optional features
+
+[dependencies]
+# Core async runtime - minimal features
+tokio = { version = "1.36.0", features = [
+    "rt-multi-thread",   # Multi-threaded runtime
+    "macros",           # #[tokio::main] etc
+    "time",             # Timer functionality
+    "sync",             # Synchronization primitives
+    "io-util",          # I/O utilities
+    "net",              # Network I/O
+    "fs",               # File system operations
+    "signal",           # Signal handling
+] }
+
+# Serial communication
+serialport = { path = "./serialport-rs" }
+nmea = "0.7.0"
+
+# Essential utilities - minimal features
+bytes = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Time handling - minimal features
+chrono = { version = "0.4", features = ["serde"], default-features = false }
+
+# CLI - minimal features
+clap = { version = "4.0", features = ["derive", "std"], default-features = false }
+
+# Serialization - minimal
+serde_json = { version = "1.0", features = ["std"], default-features = false }
+
+# Logging - minimal
+log = "0.4"
+env_logger = { version = "0.10", default-features = false, features = ["auto-color"] }
+
+# Config - Memory optimized with necessary features only
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+
+# Add serde support separately if needed
+serde = { version = "1.0", features = ["derive", "std"], default-features = false }
+
+
+# Async traits
+async-trait = "0.1.88"
+
+# Utilities
+hex = "0.4"
+uuid = { version = "1.0", features = ["v4"], default-features = false }
+base64 = "0.13"
+
+# Database - optional and minimal
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "derive"], default-features = false,optional = true }
+
+# WebSocket - optional and minimal
+tokio-tungstenite = { version = "0.20", default-features = false, features = ["connect"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"],optional = true }
+
+# HTTP API - optional and minimal
+actix-web = { version = "4.4", default-features = false, features = ["macros", "compress-gzip"],optional = true }
+
+# NEW: Smaller alternatives for embedded use
+[target.'cfg(target_arch = "arm")'.dependencies]
+# Use jemalloc for better memory management on ARM
+jemallocator = { version = "0.5", optional = true }
+
+[target.'cfg(not(target_arch = "arm"))'.dependencies]
+# Use system allocator on other platforms
+
+# NEW: Build optimizations
+[package.metadata.cargo-udeps.ignore]
+normal = ["jemallocator"]  # Ignore conditional dependencies
+
+# NEW: Workspace settings for better optimization
+[workspace]
+resolver = "2"
+
+# NEW: Documentation and metadata optimizations
