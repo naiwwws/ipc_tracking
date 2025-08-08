@@ -168,8 +168,8 @@ fn build_cli() -> Command {
         )
 
                 .subcommand(
-            Command::new("config")
-                .about("Configuration management")
+            Command::new("device-config") // Changed from "config"
+                .about("Device configuration management")
                 .subcommand(
                     Command::new("add")
                         .about("Add new device")
