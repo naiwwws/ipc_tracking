@@ -57,25 +57,6 @@ pub async fn handle_subcommands(
         return Ok(true);
     }
 
-    // Handle getrawdata command
-    if let Some(matches) = matches.subcommand_matches("getrawdata") {
-        info!("🔍 Executing getrawdata command...");
-        
-        let device_address: u8 = matches.get_one::<String>("device").unwrap().parse()
-            .map_err(|_| anyhow!("Invalid device address"))?;
-        
-        let default_format = "hex".to_string();
-        let format = matches.get_one::<String>("format").unwrap_or(&default_format);
-        
-        if let Some(output_file) = matches.get_one::<String>("output") {
-            service.read_raw_device_data(device_address, format, Some(output_file)).await?;
-        } else {
-            service.read_raw_device_data(device_address, format, None).await?;
-        }
-        
-        return Ok(true);
-    }
-
     // Handle database commands
     if let Some(matches) = matches.subcommand_matches("db") {
         if let Some(sub_matches) = matches.subcommand_matches("query") {
