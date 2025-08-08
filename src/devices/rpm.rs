@@ -296,7 +296,7 @@ impl RpmDevice {
     async fn detect_channels(&self, client: &dyn ModbusClientTrait) -> Result<u8, ModbusError> {
         // Try to read the configuration register at address 0x00FF (last register)
         // But first, let's try reading from address 0 to see if device responds
-        match client.read_holding_registers(self.address, 0x0000, 1).await {
+        match client.read_holding_registers(self.address, 0x0001, 1).await {
             Ok(data) => {
                 if data.len() >= 2 {
                     // If we can read from address 0, the device is responding
@@ -391,8 +391,7 @@ impl Device for RpmDevice {
         
         info!("📊 Reading {} registers from device {} starting at address 0", total_registers, self.address);
         
-        // FIX: Always start reading from address 0x0000
-        match client.read_holding_registers(self.address, 0x0000, total_registers).await {
+        match client.read_holding_registers(self.address, 0x0001, total_registers).await {
             Ok(data) => {
                 if data.len() >= (total_registers * 2) as usize { // 2 bytes per register
                     let mut global_error = false;
