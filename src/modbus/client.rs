@@ -4,7 +4,7 @@ use serialport::SerialPort;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::crc::crc16_modbus;
 use crate::config::settings::ParityConfig;
@@ -45,6 +45,7 @@ pub trait ModbusClientTrait: Send + Sync {
 
 pub struct ModbusClient {
     port: Arc<Mutex<Box<dyn SerialPort>>>,  // ← Wrapped in Arc<Mutex<>>
+    last_communication: Arc<Mutex<Instant>>, // Add this for timing
 }
 
 impl ModbusClient {
@@ -73,10 +74,26 @@ impl ModbusClient {
                 ModbusError::ConnectionError(format!("Failed to open port: {}", e))
             })?;
 
-        info!(" Modbus RTU connection established successfully");
+        info!("✅ Modbus RTU connection established successfully");
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
+            last_communication: Arc::new(Mutex::new(Instant::now())), // Initialize timing
         })
+    }
+
+    // Add method to ensure proper timing between communications
+    fn ensure_communication_gap(&self) -> Result<(), ModbusError> {
+        let min_gap = Duration::from_millis(100); // Minimum gap between communications
+        
+        if let Ok(mut last_comm) = self.last_communication.lock() {
+            let elapsed = last_comm.elapsed();
+            if elapsed < min_gap {
+                let wait_time = min_gap - elapsed;
+                std::thread::sleep(wait_time);
+            }
+            *last_comm = Instant::now();
+        }
+        Ok(())
     }
 }
 
@@ -88,6 +105,9 @@ impl ModbusClientTrait for ModbusClient {
         start_addr: u16,
         count: u16,
     ) -> Result<Vec<u8>, ModbusError> {
+        // Ensure proper timing
+        self.ensure_communication_gap()?;
+        
         info!("📊 Reading {} registers from device {} starting at address {}", count, slave_id, start_addr);
 
         let mut request = vec![slave_id, 0x03];
@@ -99,13 +119,17 @@ impl ModbusClientTrait for ModbusClient {
 
         let mut port = self.port.lock().map_err(|_| ModbusError::LockError)?;
 
+        // Clear any existing data in buffer
+        port.clear(serialport::ClearBuffer::All)
+            .map_err(|e| ModbusError::CommunicationError(format!("Buffer clear failed: {}", e)))?;
+
         port.write_all(&request)
             .map_err(|e| ModbusError::CommunicationError(format!("Write failed: {}", e)))?;
         port.flush()
             .map_err(|e| ModbusError::CommunicationError(format!("Flush failed: {}", e)))?;
 
-        // Wait for response
-        thread::sleep(Duration::from_millis(50));
+        // Increased wait time for RS485 communication
+        std::thread::sleep(Duration::from_millis(200));
 
         let expected_len = 5 + (count * 2) as usize;
         let mut response = vec![0u8; expected_len];
@@ -136,6 +160,8 @@ impl ModbusClientTrait for ModbusClient {
         coil_addr: u16,
         value: bool,
     ) -> Result<(), ModbusError> {
+        self.ensure_communication_gap()?;
+        
         let mut request = vec![slave_id, 0x05];
         request.extend_from_slice(&coil_addr.to_be_bytes());
         request.extend_from_slice(&(if value { 0xFF00u16 } else { 0x0000u16 }).to_be_bytes());
