@@ -388,9 +388,9 @@ impl Device for RpmDevice {
             4 => 14, // 4 RPM + 4 FREQ + 4 PULSE + 1 SLAVE + 1 BAUD
             _ => (active_channels * 3 + 2) as u16, // General formula
         };
-        
-        info!("📊 Reading {} registers from device {} starting at address 0", total_registers, self.address);
-        
+
+        info!("📊 Reading {} registers from device {} starting at address 0x0001", total_registers, self.address);
+
         match client.read_holding_registers(self.address, 0x0001, total_registers).await {
             Ok(data) => {
                 if data.len() >= (total_registers * 2) as usize { // 2 bytes per register
