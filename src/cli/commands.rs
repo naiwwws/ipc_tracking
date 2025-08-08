@@ -112,58 +112,6 @@ pub async fn handle_subcommands(
         }
     }
 
-    // Handle flowmeter commands
-    if let Some(matches) = matches.subcommand_matches("flowmeter") {
-        if let Some(sub_matches) = matches.subcommand_matches("query") {
-            info!("📋 Executing flowmeter query command...");
-            
-            let device_address: u8 = sub_matches.get_one::<String>("device").unwrap().parse()
-                .map_err(|_| anyhow!("Invalid device address"))?;
-                
-            let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"10".to_string()).parse()
-                .map_err(|_| anyhow!("Invalid limit"))?;
-                
-            service.query_flowmeter_data(device_address, limit).await?;
-            return Ok(true);
-        }
-        
-        if let Some(_) = matches.subcommand_matches("stats") {
-            info!("📊 Executing flowmeter stats command...");
-            service.get_flowmeter_stats().await?;
-            return Ok(true);
-        }
-        
-        if let Some(sub_matches) = matches.subcommand_matches("recent") {
-            info!("📋 Executing flowmeter recent command...");
-            
-            let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
-                .map_err(|_| anyhow!("Invalid limit"))?;
-                
-            if let Some(db_service) = service.get_database_service() {
-                let readings = db_service.get_recent_flowmeter_readings(limit).await?;
-                
-                println!("📋 Recent flowmeter readings (last {}):", limit);
-                println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
-                    "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
-                println!("{}", "-".repeat(80));
-                
-                for reading in readings {
-                    println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
-                        reading.mass_flow_rate,
-                        reading.temperature,
-                        reading.density_flow,
-                        reading.volume_flow_rate,
-                        reading.error_code,
-                        reading.unix_timestamp
-                    );
-                }
-            } else {
-                println!("❌ Database service not enabled");
-            }
-            return Ok(true);
-        }
-    }
-
     // Handle RPM commands
     if let Some(rpm_matches) = matches.subcommand_matches("rpm") {
         handle_rpm_command(service, rpm_matches).await?;
