@@ -393,6 +393,83 @@ fn build_cli() -> Command {
                         )
                 )
         )
+        // Add missing subcommands:
+        .subcommand(
+            Command::new("getrawdata")
+                .about("Get raw data from device")
+                .arg(Arg::new("device")
+                    .help("Device address")
+                    .required(true)
+                    .index(1))
+                .arg(Arg::new("format")
+                    .long("format")
+                    .help("Output format")
+                    .value_parser(["hex", "raw", "json"])
+                    .default_value("hex"))
+                .arg(Arg::new("output")
+                    .long("output")
+                    .help("Output file path")
+                    .value_name("FILE"))
+        )
+        .subcommand(
+            Command::new("flowmeter")
+                .about("Flowmeter device operations")
+                .subcommand(
+                    Command::new("query")
+                        .about("Query flowmeter data")
+                        .arg(Arg::new("device")
+                            .help("Device address")
+                            .required(true)
+                            .index(1))
+                        .arg(Arg::new("limit")
+                            .help("Number of records")
+                            .default_value("10"))
+                )
+                .subcommand(
+                    Command::new("stats")
+                        .about("Show flowmeter statistics")
+                )
+                .subcommand(
+                    Command::new("recent")
+                        .about("Show recent flowmeter readings")
+                        .arg(Arg::new("limit")
+                            .help("Number of records")
+                            .default_value("20"))
+                )
+        )
+        .subcommand(
+            Command::new("rpm")
+                .about("RPM device operations")
+                .subcommand(
+                    Command::new("read")
+                        .about("Read RPM device data")
+                        .arg(Arg::new("address")
+                            .help("Device address")
+                            .required(true))
+                        .arg(Arg::new("channel")
+                            .help("Specific channel (optional)")
+                            .long("channel"))
+                )
+                .subcommand(
+                    Command::new("status")
+                        .about("Show RPM device status")
+                )
+        )
+        .subcommand(
+            Command::new("engine")
+                .about("Engine management commands")
+                .subcommand(
+                    Command::new("duration")
+                        .about("Engine duration commands")
+                        .subcommand(
+                            Command::new("reset")
+                                .about("Reset engine duration")
+                                .arg(Arg::new("address")
+                                    .help("Engine address")
+                                    .required(true))
+                        )
+                )
+        )
 }
 
 

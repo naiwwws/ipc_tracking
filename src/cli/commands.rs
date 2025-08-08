@@ -34,26 +34,41 @@ pub async fn handle_subcommands(
         service.add_sender(Box::new(FileSender::new(output_file, true)));
     }
 
-    // NEW: Handle GPS commands
+    // Handle GPS commands
     if let Some(matches) = matches.subcommand_matches("gps") {
         return handle_gps_commands(matches, service).await;
     }
 
-    // Handle subcommands
+    // Handle basic subcommands
     if let Some(_matches) = matches.subcommand_matches("getdata") {
         info!("🔍 Executing getdata command...");
         service.read_all_devices_once().await?;
-        
         return Ok(true);
     }
 
     if let Some(matches) = matches.subcommand_matches("resetaccumulation") {
         let device_addr: u8 = matches.get_one::<String>("device_address").unwrap().parse()?;
-        
         info!("🔄 Executing reset accumulation for device {}...", device_addr);
         service.reset_accumulation(device_addr).await?;
         println!("✅ Reset accumulation command sent to device {}", device_addr);
+        return Ok(true);
+    }
+
+    // Handle getrawdata command
+    if let Some(matches) = matches.subcommand_matches("getrawdata") {
+        info!("🔍 Executing getrawdata command...");
         
+        let device_address: u8 = matches.get_one::<String>("device").unwrap().parse()
+            .map_err(|_| anyhow!("Invalid device address"))?;
+        
+        let default_format = "hex".to_string();
+        let format = matches.get_one::<String>("format").unwrap_or(&default_format);
+        
+        if let Some(output_file) = matches.get_one::<String>("output") {
+            service.read_raw_device_data(device_address, format, Some(output_file)).await?;
+        } else {
+            service.read_raw_device_data(device_address, format, None).await?;
+        }
         return Ok(true);
     }
 
@@ -72,6 +87,58 @@ pub async fn handle_subcommands(
             } else {
                 println!("📋 Querying all devices (last {}):", limit);
             }
+            return Ok(true);
+        }
+        
+        if let Some(_) = matches.subcommand_matches("stats") {
+            info!("📊 Executing database stats command...");
+            service.get_flowmeter_stats().await?;
+            return Ok(true);
+        }
+        
+        if let Some(sub_matches) = matches.subcommand_matches("recent") {
+            info!("📋 Executing database recent command...");
+            
+            let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
+                .map_err(|_| anyhow!("Invalid limit"))?;
+                
+            if let Some(db_service) = service.get_database_service() {
+                let readings = db_service.get_recent_flowmeter_readings(limit).await?;
+                
+                println!("📋 Recent flowmeter readings (last {}):", limit);
+                println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
+                    "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
+                println!("{}", "-".repeat(80));
+                
+                for reading in readings {
+                    println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
+                        reading.mass_flow_rate,
+                        reading.temperature,
+                        reading.density_flow,
+                        reading.volume_flow_rate,
+                        reading.error_code,
+                        reading.unix_timestamp
+                    );
+                }
+            } else {
+                println!("❌ Database service not enabled");
+            }
+            return Ok(true);
+        }
+    }
+
+    // Handle flowmeter commands (NOW properly defined in CLI)
+    if let Some(matches) = matches.subcommand_matches("flowmeter") {
+        if let Some(sub_matches) = matches.subcommand_matches("query") {
+            info!("📋 Executing flowmeter query command...");
+            
+            let device_address: u8 = sub_matches.get_one::<String>("device").unwrap().parse()
+                .map_err(|_| anyhow!("Invalid device address"))?;
+                
+            let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"10".to_string()).parse()
+                .map_err(|_| anyhow!("Invalid limit"))?;
+                
+            service.query_flowmeter_data(device_address, limit).await?;
             return Ok(true);
         }
         
@@ -118,14 +185,13 @@ pub async fn handle_subcommands(
         return Ok(true);
     }
 
-    // Handle engine commands (alias for RPM commands)
+    // Handle engine commands
     if let Some(engine_matches) = matches.subcommand_matches("engine") {
         handle_engine_commands(engine_matches, service).await?;
         return Ok(true);
     }
 
-    // Add MTWS CLI commands
-
+    // Handle MTWS commands
     if let Some(matches) = matches.subcommand_matches("mtws") {
         handle_mtws_commands(matches, service).await?;
         return Ok(true);
@@ -424,15 +490,14 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataServi
         Some(("start", _)) => {
             println!("🛰️ Starting MTWS transmission...");
             
+            // Check if MTWS service is available through DataService
             if let Some(api_service) = data_service.get_api_service() {
                 match api_service.start_mtws_transmission().await {
                     Ok(_) => println!("✅ MTWS transmission started successfully"),
                     Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
                 }
             } else {
-                // Fix: Use empty JSON object instead of None::<()>
-                let empty_body = serde_json::json!({});
-                match send_mtws_http_request::<_, ()>("POST", "/api/mtws/start", Some(&empty_body)).await {
+                match send_mtws_http_request::<(), serde_json::Value>("POST", "/api/mtws/start", None::<&()>).await {
                     Ok(_) => println!("✅ MTWS transmission started successfully"),
                     Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
                 }
@@ -448,9 +513,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataServi
                     Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
                 }
             } else {
-                // Fix: Use empty JSON object instead of None::<()>
-                let empty_body = serde_json::json!({});
-                match send_mtws_http_request::<_, ()>("POST", "/api/mtws/stop", Some(&empty_body)).await {
+                match send_mtws_http_request::<(), serde_json::Value>("POST", "/api/mtws/stop", None::<&()>).await {
                     Ok(_) => println!("✅ MTWS transmission stopped successfully"),
                     Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
                 }
@@ -475,7 +538,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataServi
                     Err(e) => println!("❌ Failed to send MTWS payload: {}", e),
                 }
             } else {
-                match send_mtws_http_request::<_, ()>("POST", "/api/mtws/send", Some(&payload)).await {
+                match send_mtws_http_request::<_, serde_json::Value>("POST", "/api/mtws/send", Some(&payload)).await {
                     Ok(_) => println!("✅ MTWS payload sent successfully"),
                     Err(e) => println!("❌ Failed to send MTWS payload: {}", e),
                 }
@@ -498,15 +561,15 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataServi
                     Err(e) => println!("❌ Failed to get MTWS status: {}", e),
                 }
             } else {
-                match send_mtws_http_request::<serde_json::Value, serde_json::Value>("GET", "/api/mtws/status", None).await {
+                match send_mtws_http_request::<(), serde_json::Value>("GET", "/api/mtws/status", None).await {
                     Ok(response) => {
-                        if let Some(status) = response.get("status") {
-                            println!("  Status: {}", if status["is_running"].as_bool().unwrap_or(false) { "🟢 Running" } else { "🔴 Stopped" });
-                            println!("  Interval: {} seconds", status["interval_seconds"].as_u64().unwrap_or(0));
-                            if let Some(url) = status["endpoint_url"].as_str() {
+                        if let Some(config) = response.get("config") {
+                            println!("  Status: {}", if config["is_running"].as_bool().unwrap_or(false) { "🟢 Running" } else { "🔴 Stopped" });
+                            println!("  Interval: {} seconds", config["interval_seconds"].as_u64().unwrap_or(0));
+                            if let Some(url) = config["endpoint_url"].as_str() {
                                 println!("  Endpoint: {}", url);
                             }
-                            println!("  Enabled: {}", if status["enabled"].as_bool().unwrap_or(false) { "Yes" } else { "No" });
+                            println!("  Enabled: {}", if config["enabled"].as_bool().unwrap_or(false) { "Yes" } else { "No" });
                         } else {
                             println!("  Unable to parse status response");
                         }
@@ -570,7 +633,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataServi
                     
                     let payload = serde_json::Value::Object(config_update);
                     
-                    match send_mtws_http_request::<_, ()>("PUT", "/api/mtws/config", Some(&payload)).await {
+                    match send_mtws_http_request::<_, serde_json::Value>("PUT", "/api/mtws/config", Some(&payload)).await {
                         Ok(_) => println!("✅ MTWS configuration updated successfully"),
                         Err(e) => println!("❌ Failed to update MTWS configuration: {}", e),
                     }
