@@ -294,6 +294,23 @@ impl RpmDevice {
 
     // Auto-detect number of channels by reading configuration register
     async fn detect_channels(&self, client: &dyn ModbusClientTrait) -> Result<u8, ModbusError> {
+        // Try to read the configuration register at address 0x00FF (last register)
+        // But first, let's try reading from address 0 to see if device responds
+        match client.read_holding_registers(self.address, 0x0000, 1).await {
+            Ok(data) => {
+                if data.len() >= 2 {
+                    // If we can read from address 0, the device is responding
+                    info!("📡 Device {} is responding, using configured channels: {}", 
+                          self.address, self.total_channels);
+                    return Ok(self.total_channels);
+                }
+            }
+            Err(_) => {
+                warn!("📡 Device {} not responding at address 0, trying auto-detection...", self.address);
+            }
+        }
+        
+        // If basic read fails, try the configuration register approach
         match client.read_holding_registers(self.address, 0x00FF, 1).await {
             Ok(data) => {
                 if data.len() >= 2 {
@@ -357,14 +374,13 @@ impl Device for RpmDevice {
     async fn read_data(&self, client: &dyn ModbusClientTrait) -> Result<Box<dyn DeviceData>, ModbusError> {
         info!("🔄 Reading RPM data from device {} ({}) - {} channels", self.address, self.name, self.total_channels);
 
-        // Auto-detect channels if needed
-        let active_channels = self.detect_channels(client).await.unwrap_or(self.total_channels);
+        // Use configured channels instead of auto-detect for now
+        let active_channels = self.total_channels;
         
         let mut rpm_data = RpmData::new(self.address, active_channels, self.rpm_thresholds.clone());
 
         // Calculate total registers needed based on your structure:
-        // RPM_CH1, RPM_CH2, FREQ_CH1, FREQ_CH2, PULSE_CH1, PULSE_CH2, SLAVE_ADDR, BAUDRATE
-        // For 2 channels: 2 RPM + 2 FREQ + 2 PULSE + 1 SLAVE + 1 BAUD = 8 registers
+        // For 2 channels: RPM_CH1, RPM_CH2, FREQ_CH1, FREQ_CH2, PULSE_CH1, PULSE_CH2, SLAVE_ADDR, BAUDRATE
         let total_registers = match active_channels {
             1 => 5, // 1 RPM + 1 FREQ + 1 PULSE + 1 SLAVE + 1 BAUD
             2 => 8, // 2 RPM + 2 FREQ + 2 PULSE + 1 SLAVE + 1 BAUD
@@ -373,12 +389,17 @@ impl Device for RpmDevice {
             _ => (active_channels * 3 + 2) as u16, // General formula
         };
         
+        info!("📊 Reading {} registers from device {} starting at address 0", total_registers, self.address);
+        
+        // FIX: Always start reading from address 0x0000
         match client.read_holding_registers(self.address, 0x0000, total_registers).await {
             Ok(data) => {
                 if data.len() >= (total_registers * 2) as usize { // 2 bytes per register
                     let mut global_error = false;
                     
-                    // Parse RPM values first (RPM_CH1, RPM_CH2, ...)
+                    info!("📊 Device {} returned {} bytes of data", self.address, data.len());
+                    
+                    // Parse RPM values first (registers 0, 1, 2, ... for channels 1, 2, 3, ...)
                     for channel_idx in 0..active_channels {
                         let rpm_offset = (channel_idx as usize) * 2; // 2 bytes per register
                         
@@ -390,14 +411,17 @@ impl Device for RpmDevice {
                                 channel.rpm_value = filtered_rpm;
                                 channel.status = "OK".to_string();
                                 channel.error_code = 0;
+                                
+                                info!("📊 Channel {} RPM: {} (raw: {})", channel_idx + 1, filtered_rpm, raw_rpm);
                             }
                         } else {
+                            warn!("⚠️ Not enough data for RPM channel {}", channel_idx + 1);
                             global_error = true;
                         }
                     }
                     
-                    // Parse FREQ values (FREQ_CH1, FREQ_CH2, ...)
-                    let freq_start_offset = (active_channels as usize) * 2; // After all RPM values
+                    // Parse FREQ values (after all RPM values)
+                    let freq_start_offset = (active_channels as usize) * 2;
                     for channel_idx in 0..active_channels {
                         let freq_offset = freq_start_offset + (channel_idx as usize) * 2;
                         
@@ -406,14 +430,16 @@ impl Device for RpmDevice {
                             
                             if let Some(channel) = rpm_data.channels.get_mut(channel_idx as usize) {
                                 channel.freq_value = freq_value;
+                                info!("📊 Channel {} FREQ: {}", channel_idx + 1, freq_value);
                             }
                         } else {
+                            warn!("⚠️ Not enough data for FREQ channel {}", channel_idx + 1);
                             global_error = true;
                         }
                     }
                     
-                    // Parse PULSE values (PULSE_CH1, PULSE_CH2, ...)
-                    let pulse_start_offset = freq_start_offset + (active_channels as usize) * 2; // After all FREQ values
+                    // Parse PULSE values (after all FREQ values)
+                    let pulse_start_offset = freq_start_offset + (active_channels as usize) * 2;
                     for channel_idx in 0..active_channels {
                         let pulse_offset = pulse_start_offset + (channel_idx as usize) * 2;
                         
@@ -426,11 +452,11 @@ impl Device for RpmDevice {
                                 // Update engine running status
                                 channel.is_engine_running = channel.is_engine_running();
                                 
-                                info!("📊 Channel {} - RPM: {}, Freq: {}, Pulse: {}, Running: {}", 
-                                      channel.channel_id, channel.rpm_value, channel.freq_value, 
-                                      channel.pulse_config, channel.is_engine_running);
+                                info!("📊 Channel {} PULSE: {}, Running: {}", 
+                                      channel_idx + 1, pulse_config, channel.is_engine_running);
                             }
                         } else {
+                            warn!("⚠️ Not enough data for PULSE channel {}", channel_idx + 1);
                             global_error = true;
                         }
                     }
@@ -448,6 +474,8 @@ impl Device for RpmDevice {
                     
                     rpm_data.device_status = if global_error { "Partial Read Error".to_string() } else { "OK".to_string() };
                     rpm_data.global_error_code = if global_error { 1 } else { 0 };
+                    
+                    info!("✅ Successfully read RPM data from device {} - Status: {}", self.address, rpm_data.device_status);
                     
                 } else {
                     warn!("⚠️ Invalid RPM data length from device {} (got {} bytes, expected {})", 
