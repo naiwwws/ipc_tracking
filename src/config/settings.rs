@@ -44,6 +44,9 @@ pub struct Config {
 
     // NEW: GPS configuration
     pub gps: GpsConfig,
+
+    // NEW: MTWS configuration
+    pub mtws: MtwsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +214,48 @@ impl Default for GpsConfig {
     }
 }
 
+// Add MTWS configuration to the Config struct
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MtwsConfig {
+    pub enabled: bool,
+    pub endpoint_url: String,
+    pub interval_seconds: u64,
+    pub auto_start: bool,
+    pub timeout_seconds: u64,
+    pub retry_attempts: u32,
+    pub include_gps: bool,
+    pub include_flowmeter: bool,
+    pub include_rpm: bool,
+    pub include_engine_durations: bool,
+    pub headers: HashMap<String, String>,
+    pub endpoints: HashMap<String, String>,
+}
+
+impl Default for MtwsConfig {
+    fn default() -> Self {
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        
+        let mut endpoints = HashMap::new();
+        endpoints.insert("combined_data".to_string(), "https://api.example.com/combined".to_string());
+        
+        Self {
+            enabled: true,
+            endpoint_url: "https://api.example.com/data".to_string(),
+            interval_seconds: 10,
+            auto_start: true,
+            timeout_seconds: 30,
+            retry_attempts: 3,
+            include_gps: true,
+            include_flowmeter: true,
+            include_rpm: true,
+            include_engine_durations: true,
+            headers,
+            endpoints,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteInfo {
     pub site_id: String,
@@ -368,7 +413,33 @@ impl Default for Config {
 
             // GPS configuration
             gps: GpsConfig::default(),
+
+            // MTWS configuration
+            mtws: MtwsConfig::default(),
         }
+    }
+}
+
+fn get_default_parameters_for_type(device_type: &str) -> Vec<String> {
+    match device_type {
+        "flowmeter" => vec![
+            "MassFlowRate".to_string(),
+            "Temperature".to_string(),
+            "DensityFlow".to_string(),
+            "VolumeTotal".to_string(),
+        ],
+        "rpm" => vec![
+            "RPM".to_string(),
+            "EngineDuration".to_string(),
+            "IsRunning".to_string(),
+        ],
+        "gps" => vec![
+            "Latitude".to_string(),
+            "Longitude".to_string(),
+            "Speed".to_string(),
+            "Course".to_string(),
+        ],
+        _ => vec!["Status".to_string()],
     }
 }
 
@@ -548,16 +619,96 @@ impl Config {
 
     // Create a new device with UUID
     pub fn create_new_device(&self, address: u8, device_id: String, device_type: String, name: String, location: String) -> DeviceConfig {
+        let mut metadata = HashMap::new();
+        
+        // Add default metadata based on device type
+        match device_type.as_str() {
+            "rpm" => {
+                metadata.insert("total_channels".to_string(), "2".to_string());
+                metadata.insert("rpm_threshold".to_string(), "500".to_string());
+                metadata.insert("outlier_detection_threshold".to_string(), "150".to_string());
+                metadata.insert("outlier_confirmation_threshold".to_string(), "15".to_string());
+                metadata.insert("engine_types".to_string(), "main,aux".to_string());
+                metadata.insert("auto_detect_channels".to_string(), "true".to_string());
+            }
+            "flowmeter" => {
+                metadata.insert("flow_threshold".to_string(), "0.1".to_string());
+                metadata.insert("calibration_factor".to_string(), "1.0".to_string());
+                metadata.insert("density_correction".to_string(), "true".to_string());
+            }
+            "gps" => {
+                metadata.insert("update_rate".to_string(), "1".to_string());
+                metadata.insert("precision".to_string(), "high".to_string());
+                metadata.insert("altitude_enabled".to_string(), "true".to_string());
+            }
+            _ => {}
+        }
+
+        let device_type_clone = device_type.clone(); // Clone before moving
+
         DeviceConfig {
-            uuid: Uuid::new_v4().to_string(),
+            uuid: uuid::Uuid::new_v4().to_string(),
             address,
             device_type,
             name,
             location,
             enabled: true,
             polling_interval: None,
-            parameters: vec!["MassFlowRate".to_string(), "Temperature".to_string()],
-            metadata: HashMap::new(),
+            parameters: get_default_parameters_for_type(&device_type_clone), // Use the clone
+            metadata,
         }
+    }
+
+    // Get multi-channel RPM configuration
+    pub fn get_rpm_channel_config(&self, address: u8) -> (u8, Vec<u16>) {
+        if let Some(device) = self.get_device_by_address(address) {
+            if device.device_type == "rpm" {
+                let total_channels = device.metadata.get("total_channels")
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(2);
+                
+                let mut thresholds = Vec::new();
+                for i in 1..=total_channels {
+                    let threshold_key = format!("rpm_threshold_ch{}", i);
+                    let threshold = device.metadata.get(&threshold_key)
+                        .and_then(|s| s.parse::<u16>().ok())
+                        .or_else(|| device.metadata.get("rpm_threshold")
+                            .and_then(|s| s.parse::<u16>().ok()))
+                        .unwrap_or(500);
+                    thresholds.push(threshold);
+                }
+                
+                return (total_channels, thresholds);
+            }
+        }
+        (2, vec![500, 500]) // Default configuration
+    }
+
+    // Get outlier detection settings for RPM device
+    pub fn get_rpm_outlier_settings(&self, address: u8) -> (u16, u16) {
+        if let Some(device) = self.get_device_by_address(address) {
+            if device.device_type == "rpm" {
+                let detection_threshold = device.metadata.get("outlier_detection_threshold")
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(150);
+                
+                let confirmation_threshold = device.metadata.get("outlier_confirmation_threshold")
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .unwrap_or(15);
+                
+                return (detection_threshold, confirmation_threshold);
+            }
+        }
+        (150, 15) // Default values
+    }
+
+    // Check if auto-detection is enabled
+    pub fn is_rpm_auto_detect_enabled(&self, address: u8) -> bool {
+        if let Some(device) = self.get_device_by_address(address) {
+            return device.metadata.get("auto_detect_channels")
+                .and_then(|s| s.parse::<bool>().ok())
+                .unwrap_or(true);
+        }
+        true
     }
 }

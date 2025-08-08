@@ -1,10 +1,9 @@
 use clap::ArgMatches;
 use std::collections::HashMap;
-use uuid::Uuid;
 use chrono::Utc;
+use uuid::Uuid;
 
 use crate::config::dynamic_manager::{DynamicConfigManager, ConfigurationCommand, ConfigCommandType, ConfigTarget};
- // Add this import
 
 pub async fn handle_config_commands(
     matches: &ArgMatches,
@@ -31,9 +30,14 @@ pub async fn handle_config_commands(
         return handle_set_command(set_matches, config_manager).await;
     }
 
-    // Handle add command
+    // Handle RPM-specific commands
+    if let Some(rpm_matches) = matches.subcommand_matches("rpm") {
+        return handle_rpm_config_commands(rpm_matches, config_manager).await;
+    }
+
+    // Enhanced add command with RPM support
     if let Some(add_matches) = matches.subcommand_matches("add") {
-        return handle_add_command(add_matches, config_manager).await;
+        return handle_enhanced_add_command(add_matches, config_manager).await;
     }
 
     // Handle enable command
@@ -623,6 +627,304 @@ async fn handle_reset_command(
         }
     } else {
         println!("❌ Failed to reset configuration: {}", response.message);
+    }
+
+    Ok(true)
+}
+
+// NEW: Handle RPM-specific config commands
+async fn handle_rpm_config_commands(
+    matches: &ArgMatches,
+    config_manager: &DynamicConfigManager,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    match matches.subcommand() {
+        Some(("register", register_matches)) => {
+            handle_rpm_register_command(register_matches, config_manager).await
+        }
+        Some(("update", update_matches)) => {
+            handle_rpm_update_command(update_matches, config_manager).await
+        }
+        _ => {
+            println!("Available RPM config commands: register, update");
+            Ok(true)
+        }
+    }
+}
+
+// NEW: Handle RPM device registration
+async fn handle_rpm_register_command(
+    matches: &ArgMatches,
+    config_manager: &DynamicConfigManager,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let address = matches.get_one::<String>("address")
+        .unwrap()
+        .parse::<u8>()
+        .map_err(|_| "Invalid address format")?;
+
+    let name = matches.get_one::<String>("name").unwrap().clone();
+    let location = matches.get_one::<String>("location").unwrap().clone();
+    
+    let channels = matches.get_one::<String>("channels")
+        .unwrap()
+        .parse::<u8>()
+        .map_err(|_| "Invalid channels count")?;
+
+    if channels == 0 || channels > 8 {
+        return Err("Channels must be between 1 and 8".into());
+    }
+
+    // Parse thresholds
+    let thresholds: Vec<u16> = if let Some(threshold_strs) = matches.get_many::<String>("thresholds") {
+        let parsed_thresholds: Result<Vec<u16>, _> = threshold_strs
+            .map(|s| s.parse::<u16>())
+            .collect();
+        
+        match parsed_thresholds {
+            Ok(mut thresholds) => {
+                // Ensure we have enough thresholds, pad with default if needed
+                while thresholds.len() < channels as usize {
+                    thresholds.push(500); // Default threshold
+                }
+                // Truncate if too many
+                thresholds.truncate(channels as usize);
+                thresholds
+            }
+            Err(_) => return Err("Invalid threshold format. Use comma-separated numbers (e.g., 500,400,600)".into()),
+        }
+    } else {
+        // Default thresholds for all channels
+        vec![500; channels as usize]
+    };
+
+    // Parse engine types
+    let engine_types: Vec<String> = if let Some(type_strs) = matches.get_many::<String>("engine-types") {
+        let mut types: Vec<String> = type_strs.cloned().collect();
+        // Pad with defaults if needed
+        while types.len() < channels as usize {
+            types.push(format!("engine{}", types.len() + 1));
+        }
+        types.truncate(channels as usize);
+        types
+    } else {
+        // Default engine types
+        (1..=channels).map(|i| {
+            match i {
+                1 => "main".to_string(),
+                2 => "aux".to_string(),
+                _ => format!("engine{}", i),
+            }
+        }).collect()
+    };
+
+    let auto_detect = matches.get_flag("auto-detect");
+
+    // Build metadata for RPM device
+    let mut metadata = HashMap::new();
+    metadata.insert("total_channels".to_string(), channels.to_string());
+    metadata.insert("auto_detect_channels".to_string(), auto_detect.to_string());
+    metadata.insert("outlier_detection_threshold".to_string(), "150".to_string());
+    metadata.insert("outlier_confirmation_threshold".to_string(), "15".to_string());
+
+    // Add per-channel thresholds
+    for (i, &threshold) in thresholds.iter().enumerate() {
+        metadata.insert(format!("rpm_threshold_ch{}", i + 1), threshold.to_string());
+    }
+
+    // Add engine types
+    for (i, engine_type) in engine_types.iter().enumerate() {
+        metadata.insert(format!("engine_type_ch{}", i + 1), engine_type.clone());
+    }
+    metadata.insert("engine_types".to_string(), engine_types.join(","));
+
+    // Create configuration command
+    let mut parameters = HashMap::new();
+    parameters.insert("device_type".to_string(), "rpm".to_string());
+    parameters.insert("name".to_string(), name.clone());
+    parameters.insert("location".to_string(), location);
+
+    // Add all metadata as parameters
+    for (key, value) in metadata {
+        parameters.insert(key, value);
+    }
+
+    let command = ConfigurationCommand {
+        command_id: Uuid::new_v4().to_string(),
+        timestamp: Utc::now(),
+        operator: "CLI".to_string(),
+        command_type: ConfigCommandType::Add,
+        target: ConfigTarget::Device { address },
+        parameters,
+        apply_immediately: true,
+    };
+
+    let response = config_manager.execute_command(command).await;
+    
+    if response.success {
+        println!("✅ Successfully registered RPM device:");
+        println!("   📍 Address: {}", address);
+        println!("   🏷️  Name: {}", name);
+        println!("   🔢 Channels: {}", channels);
+        println!("   ⚡ Thresholds: {:?}", thresholds);
+        println!("   🏭 Engine Types: {:?}", engine_types);
+        println!("   🔍 Auto-detect: {}", auto_detect);
+        
+        if response.requires_restart {
+            println!("⚠️  Service restart required to activate new device");
+        }
+    } else {
+        println!("❌ Failed to register RPM device: {}", response.message);
+    }
+
+    Ok(true)
+}
+
+// NEW: Handle RPM device updates
+async fn handle_rpm_update_command(
+    matches: &ArgMatches,
+    config_manager: &DynamicConfigManager,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let address = matches.get_one::<String>("address")
+        .unwrap()
+        .parse::<u8>()
+        .map_err(|_| "Invalid address format")?;
+
+    let mut parameters = HashMap::new();
+
+    if let Some(channel_str) = matches.get_one::<String>("channel") {
+        let channel = channel_str.parse::<u8>()
+            .map_err(|_| "Invalid channel number")?;
+
+        if channel == 0 || channel > 8 {
+            return Err("Channel must be between 1 and 8".into());
+        }
+
+        if let Some(threshold_str) = matches.get_one::<String>("threshold") {
+            let threshold = threshold_str.parse::<u16>()
+                .map_err(|_| "Invalid threshold value")?;
+            
+            parameters.insert(format!("rpm_threshold_ch{}", channel), threshold.to_string());
+            println!("📊 Updating channel {} threshold to {} RPM", channel, threshold);
+        }
+
+        if let Some(engine_type) = matches.get_one::<String>("engine-type") {
+            parameters.insert(format!("engine_type_ch{}", channel), engine_type.clone());
+            println!("🏭 Updating channel {} engine type to '{}'", channel, engine_type);
+        }
+    }
+
+    if parameters.is_empty() {
+        return Err("No parameters to update. Specify --threshold and/or --engine-type".into());
+    }
+
+    let command = ConfigurationCommand {
+        command_id: Uuid::new_v4().to_string(),
+        timestamp: Utc::now(),
+        operator: "CLI".to_string(),
+        command_type: ConfigCommandType::Set,
+        target: ConfigTarget::Device { address },
+        parameters,
+        apply_immediately: true,
+    };
+
+    let response = config_manager.execute_command(command).await;
+    
+    if response.success {
+        println!("✅ Successfully updated RPM device at address {}", address);
+        if response.requires_restart {
+            println!("⚠️  Service restart required to apply changes");
+        }
+    } else {
+        println!("❌ Failed to update RPM device: {}", response.message);
+    }
+
+    Ok(true)
+}
+
+// Enhanced add command with RPM support
+async fn handle_enhanced_add_command(
+    matches: &ArgMatches,
+    config_manager: &DynamicConfigManager,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let device_type = matches.get_one::<String>("type").unwrap();
+    let address = matches.get_one::<String>("address")
+        .unwrap()
+        .parse::<u8>()
+        .map_err(|_| "Invalid address format")?;
+
+    let name = matches.get_one::<String>("name").unwrap().clone();
+    let location = matches.get_one::<String>("location").unwrap().clone();
+
+    let mut parameters = HashMap::new();
+    parameters.insert("device_type".to_string(), device_type.clone());
+    parameters.insert("name".to_string(), name.clone());
+    parameters.insert("location".to_string(), location);
+
+    // Handle RPM-specific parameters
+    if device_type == "rpm" {
+        if let Some(channels_str) = matches.get_one::<String>("channels") {
+            let channels = channels_str.parse::<u8>()
+                .map_err(|_| "Invalid channels count")?;
+
+            if channels == 0 || channels > 8 {
+                return Err("Channels must be between 1 and 8".into());
+            }
+
+            parameters.insert("total_channels".to_string(), channels.to_string());
+
+            // Parse thresholds if provided
+            if let Some(threshold_strs) = matches.get_many::<String>("thresholds") {
+                let thresholds: Result<Vec<u16>, _> = threshold_strs
+                    .map(|s| s.parse::<u16>())
+                    .collect();
+                
+                match thresholds {
+                    Ok(mut thresholds) => {
+                        // Ensure we have enough thresholds
+                        while thresholds.len() < channels as usize {
+                            thresholds.push(500);
+                        }
+                        thresholds.truncate(channels as usize);
+
+                        // Set individual channel thresholds
+                        for (i, &threshold) in thresholds.iter().enumerate() {
+                            parameters.insert(format!("rpm_threshold_ch{}", i + 1), threshold.to_string());
+                        }
+                    }
+                    Err(_) => return Err("Invalid threshold format".into()),
+                }
+            } else {
+                // Set default thresholds
+                for i in 1..=channels {
+                    parameters.insert(format!("rpm_threshold_ch{}", i), "500".to_string());
+                }
+            }
+
+            let auto_detect = matches.get_flag("auto-detect");
+            parameters.insert("auto_detect_channels".to_string(), auto_detect.to_string());
+        } else {
+            return Err("RPM devices require --channels parameter".into());
+        }
+    }
+
+    let command = ConfigurationCommand {
+        command_id: Uuid::new_v4().to_string(),
+        timestamp: Utc::now(),
+        operator: "CLI".to_string(),
+        command_type: ConfigCommandType::Add,
+        target: ConfigTarget::Device { address },
+        parameters,
+        apply_immediately: true,
+    };
+
+    let response = config_manager.execute_command(command).await;
+    
+    if response.success {
+        println!("✅ {}", response.message);
+        if response.requires_restart {
+            println!("⚠️  Service restart required to activate new device");
+        }
+    } else {
+        println!("❌ Failed to add device: {}", response.message);
     }
 
     Ok(true)

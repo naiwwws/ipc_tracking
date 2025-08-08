@@ -1,13 +1,15 @@
 use log::{error, info, warn, debug};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use tokio::fs;
 use tokio::time::{sleep, interval, Duration};
 use tokio::sync::mpsc;
 use serde_json::json;
 
-use crate::config::Config;
+use crate::config::{Config, DeviceConfig}; // Add DeviceConfig import
 use crate::modbus::ModbusClient;
-use crate::devices::{Device, DeviceData, FlowmeterDevice};
+use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice}; // Add RpmDevice
 use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
 use crate::services::DatabaseService;
@@ -76,14 +78,41 @@ impl DataService {
         // Initialize devices
         for device_config in &config.devices {
             if device_config.enabled {
-                let device = FlowmeterDevice::new(
-                    device_config.address, 
-                    device_config.name.clone(),
-                );
-                devices.push(Box::new(device));
+                match device_config.device_type.to_lowercase().as_str() {
+                    "flowmeter" => {
+                        let device = FlowmeterDevice::new(
+                            device_config.address, 
+                            device_config.name.clone(),
+                        );
+                        devices.push(Box::new(device));
+                    }
+                    "rpm" => {
+                        let (total_channels, rpm_thresholds) = config.get_rpm_channel_config(device_config.address);
+                        
+                        let rpm_device = RpmDevice::with_config(
+                            device_config.address,
+                            device_config.name.clone(),
+                            device_config.location.clone(),
+                            total_channels,
+                            rpm_thresholds,
+                        );
+                        
+                        devices.push(Box::new(rpm_device));
+                        
+                        info!("📋 Configured multi-channel RPM device with {} channels at address {}", 
+                              total_channels, device_config.address);
+                    }
+
+                    _ => {
+                        warn!("⚠️ Unknown device type: {}", device_config.device_type);
+                        continue;
+                    }
+                }
+                
                 device_address_to_uuid.insert(device_config.address, device_config.uuid.clone());
                 
-                info!("📋 Registered device '{}' at address {} with UUID: {}", 
+                info!("📋 Registered {} device '{}' at address {} with UUID: {}", 
+                      device_config.device_type,
                       device_config.name, 
                       device_config.address,
                       device_config.uuid);
@@ -276,55 +305,6 @@ impl DataService {
         Ok(())
     }
 
-    // Keep existing methods with fixes
-    pub fn get_all_device_data(&self) -> Vec<(u8, String)> {
-        if let Ok(device_data) = self.device_data.lock() {
-            self.devices
-                .iter()
-                .filter_map(|device| {
-                    let addr = device.address();
-                    self.get_uuid_from_address(addr)
-                        .and_then(|uuid| device_data.get(uuid))
-                        .map(|data| {
-                            let params = data.get_all_parameters();
-                            let formatted = params.iter()
-                                .map(|(name, value)| format!("{}: {}", name, value))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            (addr, formatted)
-                        })
-                })
-                .collect()
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn get_volatile_data(&self, parameter: &str) -> String {
-        if let Ok(device_data) = self.device_data.lock() {
-            let values: Vec<String> = self.devices
-                .iter()
-                .filter_map(|device| {
-                    let addr = device.address();
-                    self.get_uuid_from_address(addr)
-                        .and_then(|uuid| device_data.get(uuid))
-                        .and_then(|data| data.get_parameter(parameter))
-                })
-                .collect();
-            values.join(" ")
-        } else {
-            String::new()
-        }
-    }
-
-    pub async fn reset_accumulation(&self, device_addr: u8) -> Result<(), ModbusError> {
-        if let Some(device) = self.devices.iter().find(|d| d.address() == device_addr) {
-            device.reset_accumulation(self.modbus_client.as_ref()).await
-        } else {
-            Err(ModbusError::InvalidDevice(device_addr))
-        }
-    }
-
     pub async fn read_raw_device_data(&self, device_addr: u8, format: &str, output_file: Option<&String>) -> Result<(), ModbusError> {
         for device in &self.devices {
             if device.address() == device_addr {
@@ -360,89 +340,59 @@ impl DataService {
         Err(ModbusError::DeviceNotFound(format!("Device {} not found or not a flowmeter", device_addr)))
     }
 
-    pub async fn read_all_raw_device_data(&self, format: &str, output_file: Option<&String>) -> Result<(), ModbusError> {
-        let mut total_size = 0;
-        
-        for device in &self.devices {
-            if let Some(flowmeter) = device.as_any().downcast_ref::<FlowmeterDevice>() {
-                let raw_payload = flowmeter.read_raw_payload(self.modbus_client.as_ref()).await?;
-                total_size += raw_payload.payload_size;
-                
-                println!("🔍 Raw Data for Device {}:", device.address());
-                println!("{}", raw_payload.debug_info());
-                println!("────────────────────────────────────────");
-                
-                // Save to file if requested
-                if let Some(file_path) = output_file {
-                    let device_file = format!("{}_{}", file_path, device.address());
-                    let raw_format = match format {
-                        "hex" => RawDataFormat::Hex,
-                        "binary" => RawDataFormat::Binary,
-                        "json" => RawDataFormat::Json,
-                        _ => RawDataFormat::Debug,
-                    };
-                    
-                    let sender = RawDataSender::new(&device_file, raw_format, true);
-                    sender.send_raw_payload(&raw_payload).await?;
-                }
-            }
+    pub async fn reset_accumulation(&self, device_addr: u8) -> Result<(), ModbusError> {
+        if let Some(device) = self.devices.iter().find(|d| d.address() == device_addr) {
+            device.reset_accumulation(self.modbus_client.as_ref()).await
+        } else {
+            Err(ModbusError::InvalidDevice(device_addr))
         }
-        
-        println!("📊 Total Raw Data Size: {} bytes across {} devices", total_size, self.devices.len());
-        Ok(())
     }
 
-    pub async fn compare_raw_vs_processed(&self, device_addr: u8) -> Result<(), ModbusError> {
-        for device in &self.devices {
-            if device.address() == device_addr {
-                if let Some(flowmeter) = device.as_any().downcast_ref::<FlowmeterDevice>() {
-                    let (processed_data, raw_payload) = flowmeter.read_data_with_raw(self.modbus_client.as_ref()).await?;
-                    
-                    println!("🔄 Raw vs Processed Data Comparison for Device {}:", device_addr);
-                    println!("\n📊 Raw Data:");
-                    println!("{}", raw_payload.debug_info());
-                    
-                    println!("\n📈 Processed Data:");
-                    for (param, value) in processed_data.get_all_parameters() {
-                        println!("  {}: {}", param, value);
-                    }
-                    
-                    println!("\n🔬 Engineering Units from Raw:");
-                    let engineering_from_raw = raw_payload.to_engineering_units();
-                    for (param, value) in engineering_from_raw.get_all_parameters() {
-                        println!("  {}: {}", param, value);
-                    }
-                    
-                    return Ok(());
-                }
-            }
-        }
-        
-        Err(ModbusError::DeviceNotFound(format!("Device {} not found", device_addr)))
+
+    // Get RPM devices configuration
+    pub fn get_rpm_devices(&self) -> Vec<&DeviceConfig> {
+        self.config.devices.iter()
+            .filter(|d| d.enabled && d.device_type == "rpm")
+            .collect()
     }
 
-    pub async fn print_all_device_data(&self) -> Result<(), ModbusError> {
-        let device_data = self.device_data.lock().unwrap();
-        
-        println!("📊 Current Device Data:");
-        println!("{}", "=".repeat(80));
-        
-        for (uuid, data) in device_data.iter() {
-            if let Some((address, device_config)) = self.device_address_to_uuid.iter()
-                .find(|(_, u)| *u == uuid)
-                .and_then(|(addr, _)| self.config.get_device_by_uuid(uuid).map(|config| (*addr, config)))
-            {
-                println!("🔧 Device: {} (Address: {}, UUID: {})", device_config.name, address, uuid);
-                println!("📍 Location: {}", device_config.location);
-                
-                println!("📊 Data:");
-                for (param, value) in data.get_all_parameters() {
-                    println!("  {}: {}", param, value);
+    // Get flowmeter devices configuration  
+    pub fn get_flowmeter_devices(&self) -> Vec<&DeviceConfig> {
+        self.config.devices.iter()
+            .filter(|d| d.enabled && d.device_type == "flowmeter")
+            .collect()
+    }
+
+    // Get device data by address as JSON string
+    pub async fn get_device_data_by_address(&self, device_address: u8) -> Option<String> {
+        if let Ok(device_data) = self.device_data.lock() {
+            if let Some(uuid) = self.get_uuid_from_address(device_address) {
+                if let Some(data) = device_data.get(uuid) {
+                    return Some(data.to_json().to_string());
                 }
-                println!("{}", "-".repeat(40));
             }
         }
-        
+        None
+    }
+
+    // Get channel-specific RPM data (single implementation)
+    pub async fn get_rpm_channel_data(&self, device_address: u8, channel_id: u8) -> Option<String> {
+        if let Some(data_str) = self.get_device_data_by_address(device_address).await {
+            if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                if let Some(channels) = json_data["channels"].as_array() {
+                    for channel in channels {
+                        if channel["channel_id"].as_u64() == Some(channel_id as u64) {
+                            return Some(channel.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Reset engine duration for a specific address
+    pub async fn reset_engine_duration(&self, address: u8) -> Result<(), ModbusError> {
         Ok(())
     }
 
@@ -589,5 +539,12 @@ impl DataService {
         } else {
             Ok("GPS not available".to_string())
         }
+    }
+
+    // Add method to access API service if available
+    pub fn get_api_service(&self) -> Option<&crate::services::api_service::ApiService> {
+        // This would need to be implemented if you want direct access
+        // For now, we'll use HTTP requests to the API
+        None
     }
 }

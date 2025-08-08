@@ -525,20 +525,87 @@ impl DynamicConfigManager {
                 let name = command.parameters.get("name").cloned().unwrap_or_else(|| format!("Device {}", address));
                 let location = command.parameters.get("location").cloned().unwrap_or_else(|| "Unknown".to_string());
 
+                // Build metadata from parameters
+                let mut metadata = HashMap::new();
+                
+                // Extract metadata from parameters (anything that's not core device info)
+                for (key, value) in &command.parameters {
+                    match key.as_str() {
+                        "device_type" | "name" | "location" => {
+                            // Skip core parameters
+                        }
+                        _ => {
+                            metadata.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+
+                // Set default parameters based on device type
+                let parameters = match device_type.as_str() {
+                    "flowmeter" => vec![
+                        "MassFlowRate".to_string(),
+                        "Temperature".to_string(),
+                        "DensityFlow".to_string(),
+                        "VolumeTotal".to_string(),
+                    ],
+                    "rpm" => {
+                        let channels = metadata.get("total_channels")
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .unwrap_or(2);
+                        
+                        let mut params = vec![
+                            "TotalChannels".to_string(),
+                            "GlobalErrorCode".to_string(),
+                            "RunningEngines".to_string(),
+                        ];
+                        
+                        // Add channel-specific parameters
+                        for i in 1..=channels {
+                            params.extend([
+                                format!("RPM{}", i),
+                                format!("Freq{}", i),
+                                format!("EngineDuration{}", i),
+                                format!("IsRunning{}", i),
+                                format!("ErrorCode{}", i),
+                            ]);
+                        }
+                        params
+                    }
+                    "gps" => vec![
+                        "Latitude".to_string(),
+                        "Longitude".to_string(),
+                        "Speed".to_string(),
+                        "Course".to_string(),
+                        "Altitude".to_string(),
+                        "Satellites".to_string(),
+                    ],
+                    _ => vec!["Status".to_string()],
+                };
+
                 let new_device = DeviceConfig {
                     address: *address,
-                    device_type,
+                    device_type: device_type.clone(),
                     name: name.clone(),
                     location,
                     enabled: true,
                     polling_interval: None,
-                    parameters: vec!["MassFlowRate".to_string(), "Temperature".to_string()],
-                    metadata: HashMap::new(),
+                    parameters,
+                    metadata,
                     uuid: uuid::Uuid::new_v4().to_string(),
                 };
 
                 config.devices.push(new_device);
-                Ok((true, format!("Added new device: {} at address {}", name, address), None, Some(format!("Device {}", address)), true))
+                
+                let message = if device_type == "rpm" {
+                let channels = command.parameters.get("total_channels")
+                    .cloned()
+                    .unwrap_or_else(|| "2".to_string());
+                    format!("Added new {} device: {} at address {} with {} channels", device_type, name, address, channels)
+                } else {
+                    format!("Added new {} device: {} at address {}", device_type, name, address)
+                };
+                
+                Ok((true, message, None, Some(format!("Device {}", address)), true))
             }
             _ => Err(ModbusError::InvalidData("ADD command only supports Device target".to_string())),
         }

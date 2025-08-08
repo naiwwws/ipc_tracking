@@ -7,13 +7,26 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::utils::error::ModbusError;
 use crate::storage::{SqliteManager};
-use crate::services::data_service::DataService; // FIXED: Updated import path
+use crate::services::data_service::DataService;
+use crate::services::mtws_service::{MtwsService}; // Add MTWS import
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowType {
     FlowIn,
     FlowOut,
+}
+
+// MTWS API Request/Response types
+#[derive(Debug, Deserialize)]
+pub struct MtwsConfig {
+    pub interval_seconds: u64,
+    pub endpoint_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendMtwsPayloadRequest {
+    pub endpoint_url: Option<String>,
 }
 
 // Error response
@@ -30,15 +43,24 @@ pub struct ErrorResponse {
 pub struct ApiServiceState {
     pub sqlite_manager: SqliteManager,
     pub config: Config,
-    pub data_service: Option<Arc<DataService>>, // NEW field
+    pub data_service: Option<Arc<DataService>>,
+    pub mtws_service: Option<Arc<MtwsService>>, // Add MTWS service
 }
 
 impl ApiServiceState {
     pub fn new(config: Config, sqlite_manager: SqliteManager, data_service: Option<Arc<DataService>>) -> Self {
+        // Create MTWS service if data service is available
+        let mtws_service = if let Some(data_svc) = &data_service {
+            Some(Arc::new(MtwsService::new(data_svc.clone(), config.clone())))
+        } else {
+            None
+        };
+
         Self {
             sqlite_manager,
             config,
             data_service,
+            mtws_service,
         }
     }
 }
@@ -58,7 +80,6 @@ impl ApiService {
         }
     }
     
-    // NEW: Constructor that accepts pre-built state with DataService
     pub fn new_with_state(state: ApiServiceState) -> Result<Self, ModbusError> {
         Ok(Self {
             state,
@@ -78,21 +99,28 @@ impl ApiService {
                 .service(
                     web::scope("/api")
                         .route("/health", web::get().to(health_check))
+                        // New combined data endpoints
+                        .route("/data/combined", web::get().to(get_combined_data))
+                        .route("/data/send", web::post().to(send_combined_data))
+                        .service(
+                            web::scope("/mtws")
+                                .route("/configure", web::post().to(configure_mtws))
+                                .route("/start", web::post().to(start_mtws_transmission))
+                                .route("/stop", web::post().to(stop_mtws_transmission))
+                                .route("/send", web::post().to(send_mtws_payload))
+                                .route("/status", web::get().to(mtws_status))
+                                .route("/config", web::get().to(get_mtws_config))
+                                .route("/config", web::put().to(update_mtws_config))
+                        )
                 )
         })
         .bind(format!("0.0.0.0:{}", port))?
         .run();
-        
-        // Store server handle for graceful shutdown
-        self.server_handle = Some(server.handle());
-        
-        // Start the server in background
-        tokio::spawn(async move {
-            if let Err(e) = server.await {
-                error!("❌ HTTP API server error: {}", e);
-            }
-        });
-        
+
+        let handle = server.handle();
+        self.server_handle = Some(handle.clone());
+
+        tokio::spawn(server);
         info!("✅ HTTP API server started successfully on port {}", port);
         Ok(())
     }
@@ -101,7 +129,6 @@ impl ApiService {
         info!("🛑 Stopping HTTP API server...");
         
         if let Some(handle) = self.server_handle.take() {
-            // Use graceful shutdown with timeout
             tokio::select! {
                 _ = handle.stop(true) => {
                     info!("✅ HTTP API server stopped gracefully");
@@ -116,6 +143,54 @@ impl ApiService {
         Ok(())
     }
 
+    // Add missing MTWS methods
+    pub async fn start_mtws_transmission(&self) -> Result<(), ModbusError> {
+        if let Some(mtws_service) = &self.state.mtws_service {
+            mtws_service.start_transmission().await
+        } else {
+            Err(ModbusError::ServiceNotAvailable("MTWS service not available".to_string()))
+        }
+    }
+
+    pub async fn stop_mtws_transmission(&self) -> Result<(), ModbusError> {
+        if let Some(mtws_service) = &self.state.mtws_service {
+            mtws_service.stop_transmission().await
+        } else {
+            Err(ModbusError::ServiceNotAvailable("MTWS service not available".to_string()))
+        }
+    }
+
+    pub async fn send_mtws_payload(&self, endpoint_url: Option<String>) -> Result<(), ModbusError> {
+        if let Some(mtws_service) = &self.state.mtws_service {
+            mtws_service.send_single_payload(endpoint_url).await?;
+            Ok(())
+        } else {
+            Err(ModbusError::ServiceNotAvailable("MTWS service not available".to_string()))
+        }
+    }
+
+    pub async fn get_mtws_status(&self) -> Result<MtwsStatus, ModbusError> {
+        if let Some(mtws_service) = &self.state.mtws_service {
+            let (is_running, interval_seconds, endpoint_url, enabled) = mtws_service.get_status().await;
+            Ok(MtwsStatus {
+                is_running,
+                interval_seconds,
+                endpoint_url,
+                enabled,
+            })
+        } else {
+            Err(ModbusError::ServiceNotAvailable("MTWS service not available".to_string()))
+        }
+    }
+}
+
+// Add MtwsStatus struct
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MtwsStatus {
+    pub is_running: bool,
+    pub interval_seconds: u64,
+    pub endpoint_url: Option<String>,
+    pub enabled: bool,
 }
 
 // API Endpoints
@@ -128,4 +203,248 @@ async fn health_check() -> ActixResult<HttpResponse> {
         "timestamp": Utc::now(),
         "version": crate::VERSION
     })))
+}
+
+// MTWS API Endpoints
+
+// POST /api/mtws/configure
+async fn configure_mtws(
+    data: web::Data<ApiServiceState>,
+    config: web::Json<MtwsConfig>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        mtws_service.set_transmission_interval(config.interval_seconds).await;
+        mtws_service.set_endpoint_url(config.endpoint_url.clone()).await;
+        
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "MTWS service configured successfully",
+            "interval_seconds": config.interval_seconds,
+            "endpoint_url": config.endpoint_url
+        })))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// POST /api/mtws/start
+async fn start_mtws_transmission(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        match mtws_service.start_transmission().await {
+            Ok(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "MTWS transmission started"
+            }))),
+            Err(e) => Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                success: false,
+                error: format!("Failed to start MTWS transmission: {}", e),
+                code: "START_FAILED".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// POST /api/mtws/stop
+async fn stop_mtws_transmission(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        match mtws_service.stop_transmission().await {
+            Ok(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "MTWS transmission stopped"
+            }))),
+            Err(e) => Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                success: false,
+                error: format!("Failed to stop MTWS transmission: {}", e),
+                code: "STOP_FAILED".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// POST /api/mtws/send
+async fn send_mtws_payload(
+    data: web::Data<ApiServiceState>,
+    request: web::Json<SendMtwsPayloadRequest>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        match mtws_service.send_single_payload(request.endpoint_url.clone()).await {
+            Ok(payload) => Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "MTWS payload sent successfully",
+                "payload": payload
+            }))),
+            Err(e) => Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                success: false,
+                error: format!("Failed to send MTWS payload: {}", e),
+                code: "SEND_FAILED".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// GET /api/mtws/status
+async fn mtws_status(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        // Fix: Destructure all 4 values
+        let (is_running, interval_seconds, endpoint_url, enabled) = mtws_service.get_status().await;
+        
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "status": {
+                "is_running": is_running,
+                "interval_seconds": interval_seconds,
+                "endpoint_url": endpoint_url,
+                "enabled": enabled,
+                "service_available": true
+            }
+        })))
+    } else {
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "status": {
+                "is_running": false,
+                "interval_seconds": 0,
+                "endpoint_url": null,
+                "enabled": false,
+                "service_available": false
+            }
+        })))
+    }
+}
+
+// Add new API endpoints for combined data
+
+// New API handlers
+async fn get_combined_data(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(data_service) = &data.data_service {
+        // Fix: Use public method instead of private build_payload
+        match MtwsService::get_current_payload(data_service).await {
+            Ok(payload) => Ok(HttpResponse::Ok().json(payload)),
+            Err(e) => Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: format!("Failed to build combined data: {}", e),
+                code: "BUILD_FAILED".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "Data service not available".to_string(),
+            code: "DATA_SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+async fn send_combined_data(
+    data: web::Data<ApiServiceState>,
+    request: web::Json<SendMtwsPayloadRequest>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        match mtws_service.send_single_payload(request.endpoint_url.clone()).await {
+            Ok(payload) => Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "Combined data sent successfully",
+                "payload": payload,
+                "timestamp": Utc::now()
+            }))),
+            Err(e) => Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                success: false,
+                error: format!("Failed to send combined data: {}", e),
+                code: "SEND_FAILED".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+async fn get_mtws_config(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        let (is_running, interval_seconds, endpoint_url, enabled) = mtws_service.get_status().await;
+        
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "config": {
+                "enabled": enabled,
+                "is_running": is_running,
+                "interval_seconds": interval_seconds,
+                "endpoint_url": endpoint_url
+            }
+        })))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+async fn update_mtws_config(
+    data: web::Data<ApiServiceState>,
+    config: web::Json<MtwsConfig>,
+) -> ActixResult<HttpResponse> {
+    if let Some(mtws_service) = &data.mtws_service {
+        mtws_service.update_config(config.into_inner()).await;
+        
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "MTWS configuration updated successfully"
+        })))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "MTWS service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
 }

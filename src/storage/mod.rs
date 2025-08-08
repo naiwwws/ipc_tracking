@@ -1,5 +1,5 @@
 pub mod sqlite_manager;
 pub mod models;
 
-pub use models::{FlowmeterReading, FlowmeterStats};
-pub use sqlite_manager::{SqliteManager, DatabaseStats}; //  Add DatabaseStats export
+pub use models::{EngineDuration, EngineDurationHistory, FlowmeterReading, FlowmeterStats, RpmReading, RpmStats};
+pub use sqlite_manager::{DatabaseStats, SqliteManager};

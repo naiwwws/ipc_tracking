@@ -4,11 +4,11 @@ pub mod config_commands;
 pub mod mqtt_handler;
 
 pub use settings::{
-    Config, 
-    DeviceConfig, 
-    ParityConfig, 
-    SiteInfo, 
-    DataCollectionConfig, 
+    Config,
+    DeviceConfig,
+    ParityConfig,
+    SiteInfo,
+    DataCollectionConfig,
     OutputConfig,
     FileOutputConfig,
     HttpOutputConfig,
@@ -16,13 +16,16 @@ pub use settings::{
     DatabaseOutputConfig,
     SqliteConfig,
     RegisterConfig,
-    ApiServerConfig,       // Add this
+    ApiServerConfig,
+    GpsConfig,  // Add this
 };
+
 pub use dynamic_manager::{
-    DynamicConfigManager, 
-    ConfigurationCommand, 
-    ConfigurationResponse, 
-    ConfigCommandType, 
+    DynamicConfigManager,
+    ConfigurationCommand,
+    ConfigurationResponse,
+    ConfigCommandType,
     ConfigTarget
 };
+
 pub use mqtt_handler::{MqttConfigHandler, MqttConfigMessage, MqttConfigResponse};

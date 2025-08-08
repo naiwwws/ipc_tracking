@@ -94,7 +94,7 @@ impl Default for FlowmeterData {
 #[async_trait]
 impl Device for FlowmeterDevice {
     fn device_type(&self) -> &str {
-        "Flowmeter"
+        "flowmeter"
     }
     
     fn address(&self) -> u8 {
