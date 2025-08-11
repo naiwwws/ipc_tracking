@@ -150,7 +150,7 @@ impl MtwsService {
         Self::build_payload(data_service).await
     }
 
-    // Keep build_payload private
+    // Update the build_payload method to use direct data access
     async fn build_payload(data_service: &DataService) -> Result<MtwsPayload, ModbusError> {
         let mut payload = MtwsPayload::new();
 
@@ -183,7 +183,7 @@ impl MtwsService {
         payload.add_field("windSpeed".to_string(), "0".to_string());
         payload.add_field("windDirection".to_string(), "0".to_string());
 
-        // 5. Add flowmeter data (4 flowmeters: VolumeTotal, Density, Temperature, Flowrate)
+        // 5. Add flowmeter data (FIXED APPROACH)
         let flowmeter_devices = data_service.get_flowmeter_devices();
         info!("🔍 Found {} configured flowmeter devices", flowmeter_devices.len());
 
@@ -192,87 +192,61 @@ impl MtwsService {
             if let Some(device_config) = flowmeter_devices.get(flowmeter_number - 1) {
                 let device_address = device_config.address;
                 
-                if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
-                    match Self::extract_flowmeter_values(&device_data_str) {
-                        Ok(values) => {
-                            payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), values.volume_total.to_string());
-                            info!("✅ Added flowmeter {} VolumeTotal: {}", flowmeter_number, values.volume_total);
-                        }
-                        Err(_) => {
-                            payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), "0".to_string());
-                        }
-                    }
+                // Try to get flowmeter data directly
+                if let Some(flowmeter_data) = data_service.get_current_flowmeter_data(device_address).await {
+                    // Add volume total
+                    payload.add_field(
+                        format!("flowmeterVolumeTotal{}", flowmeter_number),
+                        flowmeter_data.volume_total.to_string()
+                    );
+                    
+                    // Add density
+                    payload.add_field(
+                        format!("flowmeterDensity{}", flowmeter_number),
+                        flowmeter_data.density_flow.to_string()
+                    );
+                    
+                    // Add temperature
+                    payload.add_field(
+                        format!("flowmeterTemperature{}", flowmeter_number),
+                        flowmeter_data.temperature.to_string()
+                    );
+                    
+                    // Add flow rate
+                    payload.add_field(
+                        format!("flowmeterFlowrate{}", flowmeter_number),
+                        flowmeter_data.mass_flow_rate.to_string()
+                    );
+                    
+                    info!("✅ Added flowmeter {} data: VT={}, D={}, T={}, FR={}", 
+                          flowmeter_number, 
+                          flowmeter_data.volume_total,
+                          flowmeter_data.density_flow,
+                          flowmeter_data.temperature,
+                          flowmeter_data.mass_flow_rate);
                 } else {
-                    payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), "0".to_string());
+                    // Fallback: try JSON string method
+                    if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
+                        match Self::extract_flowmeter_values(&device_data_str) {
+                            Ok(values) => {
+                                payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), values.volume_total.to_string());
+                                payload.add_field(format!("flowmeterDensity{}", flowmeter_number), values.density_flow.to_string());
+                                payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), values.temperature.to_string());
+                                payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), values.mass_flow_rate.to_string());
+                                info!("✅ Added flowmeter {} data via JSON extraction", flowmeter_number);
+                            }
+                            Err(e) => {
+                                warn!("⚠️ Failed to extract flowmeter {} data: {}", flowmeter_number, e);
+                                Self::add_default_flowmeter_values(&mut payload, flowmeter_number);
+                            }
+                        }
+                    } else {
+                        warn!("⚠️ No data found for flowmeter {} (address {})", flowmeter_number, device_address);
+                        Self::add_default_flowmeter_values(&mut payload, flowmeter_number);
+                    }
                 }
             } else {
-                payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), "0".to_string());
-            }
-        }
-
-        // Add flowmeter density fields
-        for flowmeter_number in 1..=4 {
-            if let Some(device_config) = flowmeter_devices.get(flowmeter_number - 1) {
-                let device_address = device_config.address;
-                
-                if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
-                    match Self::extract_flowmeter_values(&device_data_str) {
-                        Ok(values) => {
-                            payload.add_field(format!("flowmeterDensity{}", flowmeter_number), values.density_flow.to_string());
-                        }
-                        Err(_) => {
-                            payload.add_field(format!("flowmeterDensity{}", flowmeter_number), "0".to_string());
-                        }
-                    }
-                } else {
-                    payload.add_field(format!("flowmeterDensity{}", flowmeter_number), "0".to_string());
-                }
-            } else {
-                payload.add_field(format!("flowmeterDensity{}", flowmeter_number), "0".to_string());
-            }
-        }
-
-        // Add flowmeter temperature fields
-        for flowmeter_number in 1..=4 {
-            if let Some(device_config) = flowmeter_devices.get(flowmeter_number - 1) {
-                let device_address = device_config.address;
-                
-                if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
-                    match Self::extract_flowmeter_values(&device_data_str) {
-                        Ok(values) => {
-                            payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), values.temperature.to_string());
-                        }
-                        Err(_) => {
-                            payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), "0".to_string());
-                        }
-                    }
-                } else {
-                    payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), "0".to_string());
-                }
-            } else {
-                payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), "0".to_string());
-            }
-        }
-
-        // Add flowmeter flowrate fields
-        for flowmeter_number in 1..=4 {
-            if let Some(device_config) = flowmeter_devices.get(flowmeter_number - 1) {
-                let device_address = device_config.address;
-                
-                if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
-                    match Self::extract_flowmeter_values(&device_data_str) {
-                        Ok(values) => {
-                            payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), values.mass_flow_rate.to_string());
-                        }
-                        Err(_) => {
-                            payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), "0".to_string());
-                        }
-                    }
-                } else {
-                    payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), "0".to_string());
-                }
-            } else {
-                payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), "0".to_string());
+                Self::add_default_flowmeter_values(&mut payload, flowmeter_number);
             }
         }
 
@@ -354,10 +328,13 @@ impl MtwsService {
         Ok(payload)
     }
 
-    // Helper methods for extracting data
+    // Keep the JSON extraction method as fallback, but fix field names
     fn extract_flowmeter_values(data_str: &str) -> Result<FlowmeterValues, String> {
         let json_data: serde_json::Value = serde_json::from_str(data_str)
             .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+        // Debug: print the actual JSON structure
+        info!("🔍 Parsing flowmeter JSON: {}", data_str);
 
         Ok(FlowmeterValues {
             volume_total: json_data["volume_total"].as_f64().unwrap_or(0.0) as f32,

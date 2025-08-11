@@ -191,7 +191,19 @@ impl DeviceData for FlowmeterData {
     }
 
     fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+        serde_json::json!({
+            "device_address": self.device_address,
+            "timestamp": self.unix_ts(),
+            "mass_flow_rate": self.mass_flow_rate,
+            "density_flow": self.density_flow,
+            "temperature": self.temperature,
+            "volume_flow_rate": self.volume_flow_rate,
+            "mass_total": self.mass_total,
+            "volume_total": self.volume_total,
+            "mass_inventory": self.mass_inventory,
+            "volume_inventory": self.volume_inventory,
+            "error_code": self.error_code
+        })
     }
     
     fn get_parameter(&self, name: &str) -> Option<String> {
