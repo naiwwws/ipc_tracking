@@ -46,6 +46,7 @@ impl MtwsService {
         }
     }
 
+    // Add continuous transmission functionality
     pub async fn start_transmission(&self) -> Result<(), ModbusError> {
         let mut is_running = self.is_running.write().await;
         if *is_running {
@@ -56,50 +57,88 @@ impl MtwsService {
             return Err(ModbusError::ServiceNotAvailable("MTWS service is disabled".to_string()));
         }
 
-        // Validate configuration
-        self.config.validate_mtws_config()
-            .map_err(|e| ModbusError::InvalidData(format!("MTWS config error: {}", e)))?;
-
         *is_running = true;
-        info!("🛰️ Starting MTWS transmission service");
-        info!("📡 Endpoint: {}", self.config.get_mtws_endpoint_url());
-        info!("⏱️ Interval: {} seconds", self.config.mtws.transmission_interval_seconds);
+        info!("🛰️ MTWS transmission started");
 
-        // Clone necessary data for the background task
+        // Start the transmission loop
         let data_service = Arc::clone(&self.data_service);
-        let endpoint_url = self.config.get_mtws_endpoint_url();
-        let interval_duration = Duration::from_secs(self.config.mtws.transmission_interval_seconds);
+        let config = self.config.clone();
         let is_running_clone = Arc::clone(&self.is_running);
+        let interval_clone = Arc::clone(&self.transmission_interval);
 
-        // Start background transmission task
         tokio::spawn(async move {
-            let mut interval_timer = interval(interval_duration);
-            
-            while *is_running_clone.read().await {
-                interval_timer.tick().await;
-                
-                if !*is_running_clone.read().await {
-                    break;
-                }
-
-                info!("🛰️ Periodic MTWS transmission starting...");
-                match Self::generate_and_send_payload(&data_service, &endpoint_url).await {
-                    Ok(_) => info!("✅ Periodic MTWS transmission completed successfully"),
-                    Err(e) => error!("❌ Periodic MTWS transmission failed: {}", e),
-                }
-            }
-            
-            info!("🛰️ MTWS transmission service stopped");
+            Self::transmission_loop(data_service, config, is_running_clone, interval_clone).await;
         });
 
         Ok(())
     }
 
-    // Fix stop_transmission to return Result
+    async fn transmission_loop(
+        data_service: Arc<DataService>,
+        config: Config,
+        is_running: Arc<RwLock<bool>>,
+        interval: Arc<RwLock<Duration>>,
+    ) {
+        info!("🔄 MTWS transmission loop started");
+        
+        loop {
+            // Check if we should continue running
+            let should_run = *is_running.read().await;
+            if !should_run {
+                info!("🛑 MTWS transmission loop stopped");
+                break;
+            }
+
+            // Get current interval
+            let current_interval = *interval.read().await;
+            
+            // Send data
+            match Self::send_transmission_cycle(&data_service, &config).await {
+                Ok(_) => {
+                    info!("✅ MTWS transmission cycle completed successfully");
+                }
+                Err(e) => {
+                    error!("❌ MTWS transmission cycle failed: {}", e);
+                    // Continue running even if one cycle fails
+                }
+            }
+
+            // Wait for next cycle
+            tokio::time::sleep(current_interval).await;
+        }
+    }
+
+    async fn send_transmission_cycle(
+        data_service: &DataService,
+        config: &Config,
+    ) -> Result<(), ModbusError> {
+        info!("📡 Starting MTWS transmission cycle");
+
+        // Get endpoint URL
+        let endpoint_url = config.get_mtws_endpoint_url();
+        
+        // Generate and send payload
+        Self::generate_and_send_payload(data_service, &endpoint_url).await?;
+        
+        Ok(())
+    }
+
     pub async fn stop_transmission(&self) -> Result<(), ModbusError> {
         let mut is_running = self.is_running.write().await;
         *is_running = false;
-        info!("🛰️ MTWS transmission service stop requested");
+        info!("🛰️ MTWS transmission stop requested");
+        Ok(())
+    }
+
+    pub async fn set_transmission_interval(&self, seconds: u64) -> Result<(), ModbusError> {
+        if seconds < 1 {
+            return Err(ModbusError::InvalidData("Transmission interval must be at least 1 second".to_string()));
+        }
+
+        let mut interval = self.transmission_interval.write().await;
+        *interval = Duration::from_secs(seconds);
+        
+        info!("⏱️ MTWS transmission interval updated to {} seconds", seconds);
         Ok(())
     }
 
@@ -301,15 +340,6 @@ impl MtwsService {
         }
 
         info!("🔗 Base endpoint would be set to: {} (config file update needed)", base_url);
-        Ok(())
-    }
-
-    pub async fn set_transmission_interval(&self, seconds: u64) -> Result<(), ModbusError> {
-        if seconds < 1 {
-            return Err(ModbusError::InvalidData("Transmission interval must be at least 1 second".to_string()));
-        }
-
-        info!("⏱️ MTWS transmission interval would be set to {} seconds (config file update needed)", seconds);
         Ok(())
     }
 

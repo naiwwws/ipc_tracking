@@ -265,6 +265,24 @@ impl DataService {
             info!("📝 Database storage: DISABLED");
         }
 
+        // Auto-start MTWS service if enabled and configured for auto-start
+        if let Some(mtws_service) = &self.mtws_service {
+            if self.config.mtws.auto_start {
+                info!("🛰️ Auto-starting MTWS transmission service");
+                match mtws_service.start_transmission().await {
+                    Ok(_) => {
+                        info!("✅ MTWS transmission service started automatically");
+                        info!("📡 Endpoint: {}", self.config.get_mtws_endpoint_url());
+                        info!("⏱️ Interval: {} seconds", self.config.mtws.transmission_interval_seconds);
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to auto-start MTWS transmission: {}", e);
+                    }
+                }
+            } else {
+                info!("🛰️ MTWS service available but auto-start disabled");
+            }
+        }
 
         // Initial reading to verify devices are working (one-time only)
         info!("🔍 Performing initial device check...");
@@ -272,12 +290,16 @@ impl DataService {
         
         info!("✅ Service started successfully");
         info!("⏱️  Update interval: {} seconds", self.config.update_interval_seconds);
-        info!("⏳ Service ready. Waiting for WebSocket clients to start streaming...");
         
-        // Keep the service running but don't poll automatically
+        // Keep the service running
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            // Periodic device reading for MTWS and other services
+            if let Err(e) = self.read_all_devices_once().await {
+                error!("❌ Failed to read devices: {}", e);
+            }
             
+            // Wait for next cycle
+            tokio::time::sleep(tokio::time::Duration::from_secs(self.config.update_interval_seconds)).await;
         }
     }
 
