@@ -110,7 +110,6 @@ impl ApiService {
                                 .route("/send", web::post().to(send_mtws_payload))
                                 .route("/status", web::get().to(mtws_status))
                                 .route("/config", web::get().to(get_mtws_config))
-                                .route("/config", web::put().to(update_mtws_config))
                         )
                 )
         })
@@ -230,8 +229,6 @@ async fn configure_mtws(
                 timestamp: Utc::now(),
             }));
         }
-
-        mtws_service.set_endpoint_url(config.endpoint_url.clone()).await;
         
         Ok(HttpResponse::Ok().json(serde_json::json!({
             "success": true,
@@ -416,38 +413,6 @@ async fn get_mtws_config(
                 "interval_seconds": interval_seconds,
                 "endpoint_url": endpoint_url
             }
-        })))
-    } else {
-        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
-            success: false,
-            error: "MTWS service not available".to_string(),
-            code: "SERVICE_UNAVAILABLE".to_string(),
-            timestamp: Utc::now(),
-        }))
-    }
-}
-
-async fn update_mtws_config(
-    data: web::Data<ApiServiceState>,
-    config: web::Json<MtwsConfig>,
-) -> ActixResult<HttpResponse> {
-    if let Some(mtws_service) = &data.mtws_service {
-        let mtws = mtws_service.lock().await;
-        let models_config = crate::storage::models::MtwsConfig {
-            enabled: true,
-            imei: "123456789012345".to_string(),
-            base_endpoint_url: config.endpoint_url.clone(),
-            transmission_interval_seconds: config.interval_seconds,
-            timeout_seconds: 30,
-            retry_attempts: 3,
-            retry_delay_seconds: 60,
-            auto_start: false,
-        };
-        mtws.update_config(models_config).await;
-        
-        Ok(HttpResponse::Ok().json(serde_json::json!({
-            "success": true,
-            "message": "MTWS configuration updated successfully"
         })))
     } else {
         Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {

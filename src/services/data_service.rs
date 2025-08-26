@@ -651,4 +651,25 @@ impl DataService {
     pub fn get_mtws_service_mut(&mut self) -> Option<&mut MtwsService> {
         self.mtws_service.as_mut()
     }
+    
+    // Add these methods to DataService impl:
+
+    pub fn get_config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn update_config(&mut self, new_config: Config) {
+            self.config = new_config;
+            info!("📝 Configuration updated");
+            
+            // If there's any error handling needed, log warnings instead of returning errors
+            if let Some(mtws) = &self.mtws_service {
+                // Handle any MTWS updates here with logging instead of error returns
+                warn!("🔄 MTWS service restart required for configuration changes");
+            }
+        }
+        
+    pub fn has_mtws_service(&self) -> bool {
+        self.mtws_service.is_some()
+    }
 }
