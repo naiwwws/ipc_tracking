@@ -51,7 +51,7 @@ tokio = { version = "1.36.0", features = [
 ] }
 
 # Serial communication
-serialport = { path = "./serialport-rs" }
+serialport = { path = "./serialport-rs" , default-features = false }
 nmea = "0.7.0"
 
 # Essential utilities - minimal features
@@ -93,6 +93,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"
 # HTTP API - optional and minimal
 actix-web = { version = "4.4", default-features = false, features = ["macros", "compress-gzip"],optional = true }
 reqwest = { version = "0.11", features = ["json"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
 
 # NEW: Smaller alternatives for embedded use
 [target.'cfg(target_arch = "arm")'.dependencies]

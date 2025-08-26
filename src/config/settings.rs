@@ -218,40 +218,26 @@ impl Default for GpsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtwsConfig {
     pub enabled: bool,
-    pub endpoint_url: String,
-    pub interval_seconds: u64,
-    pub auto_start: bool,
+    pub imei: String,
+    pub base_endpoint_url: String,
+    pub transmission_interval_seconds: u64,
     pub timeout_seconds: u64,
     pub retry_attempts: u32,
-    pub include_gps: bool,
-    pub include_flowmeter: bool,
-    pub include_rpm: bool,
-    pub include_engine_durations: bool,
-    pub headers: HashMap<String, String>,
-    pub endpoints: HashMap<String, String>,
+    pub retry_delay_seconds: u64,
+    pub auto_start: bool,
 }
 
 impl Default for MtwsConfig {
     fn default() -> Self {
-        let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        
-        let mut endpoints = HashMap::new();
-        endpoints.insert("combined_data".to_string(), "https://api.example.com/combined".to_string());
-        
         Self {
             enabled: true,
-            endpoint_url: "https://api.example.com/data".to_string(),
-            interval_seconds: 10,
-            auto_start: true,
+            imei: "123456789012345".to_string(),
+            base_endpoint_url: "http://mtws.masihplayground.my.id:80/SubmitForm".to_string(),
+            transmission_interval_seconds: 300,
             timeout_seconds: 30,
             retry_attempts: 3,
-            include_gps: true,
-            include_flowmeter: true,
-            include_rpm: true,
-            include_engine_durations: true,
-            headers,
-            endpoints,
+            retry_delay_seconds: 60,
+            auto_start: false,
         }
     }
 }
@@ -710,5 +696,60 @@ impl Config {
                 .unwrap_or(true);
         }
         true
+    }
+
+    // Add method to get enabled flowmeter devices
+    pub fn get_enabled_flowmeter_devices(&self) -> Vec<DeviceConfig> {
+        self.get_enabled_devices()
+            .into_iter()
+            .filter(|device| device.device_type == "flowmeter")
+            .cloned()
+            .collect()
+    }
+
+    // Add method to validate flowmeter configuration
+    pub fn validate_flowmeter_config(&self) -> Result<(), String> {
+        let flowmeter_devices = self.get_enabled_flowmeter_devices();
+        
+        if flowmeter_devices.is_empty() {
+            return Err("No flowmeter devices configured".to_string());
+        }
+
+        // Check for duplicate addresses
+        let mut addresses = std::collections::HashSet::new();
+        for device in &flowmeter_devices {
+            if !addresses.insert(device.address) {
+                return Err(format!("Duplicate flowmeter address: {}", device.address));
+            }
+        }
+
+        info!("✅ Flowmeter configuration valid: {} devices", flowmeter_devices.len());
+        Ok(())
+    }
+
+    // Add method to get full MTWS endpoint with IMEI
+    pub fn get_mtws_endpoint_url(&self) -> String {
+        format!("{}/{}", self.mtws.base_endpoint_url, self.mtws.imei)
+    }
+
+    // Add method to validate MTWS configuration
+    pub fn validate_mtws_config(&self) -> Result<(), String> {
+        if !self.mtws.enabled {
+            return Ok(());
+        }
+
+        if self.mtws.imei.len() != 15 || !self.mtws.imei.chars().all(|c| c.is_ascii_digit()) {
+            return Err("IMEI must be exactly 15 digits".to_string());
+        }
+
+        if self.mtws.base_endpoint_url.is_empty() {
+            return Err("Base endpoint URL cannot be empty".to_string());
+        }
+
+        if self.mtws.transmission_interval_seconds < 60 {
+            return Err("Transmission interval must be at least 60 seconds".to_string());
+        }
+
+        Ok(())
     }
 }

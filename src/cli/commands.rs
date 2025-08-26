@@ -485,179 +485,129 @@ pub async fn handle_rpm_command(data_service: &DataService, matches: &ArgMatches
 
 // Add MTWS CLI commands
 
-pub async fn handle_mtws_commands(matches: &ArgMatches, data_service: &DataService) -> Result<(), ModbusError> {
+pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataService) -> Result<(), ModbusError> {
     match matches.subcommand() {
-        Some(("start", _)) => {
-            println!("🛰️ Starting MTWS transmission...");
+        Some(("config", sub_matches)) => {
+            if let Some(imei) = sub_matches.get_one::<String>("imei") {
+                if let Some(mtws_service) = service.get_mtws_service_mut() {
+                    match mtws_service.set_imei(imei.clone()).await {
+                        Ok(_) => {
+                            println!("✅ IMEI set to: {}", imei);
+                            println!("🔗 Endpoint URL: {}", mtws_service.get_endpoint_url());
+                        }
+                        Err(e) => println!("❌ Failed to set IMEI: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
+                }
+            }
             
-            // Check if MTWS service is available through DataService
-            if let Some(api_service) = data_service.get_api_service() {
-                match api_service.start_mtws_transmission().await {
-                    Ok(_) => println!("✅ MTWS transmission started successfully"),
+            if let Some(endpoint) = sub_matches.get_one::<String>("endpoint") {
+                if let Some(mtws_service) = service.get_mtws_service_mut() {
+                    match mtws_service.set_endpoint(endpoint.clone()).await {
+                        Ok(_) => {
+                            println!("✅ Base endpoint URL set to: {}", endpoint);
+                            println!("🔗 Full endpoint: {}", mtws_service.get_endpoint_url());
+                        }
+                        Err(e) => println!("❌ Failed to set endpoint: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
+                }
+            }
+
+            if let Some(interval_str) = sub_matches.get_one::<String>("interval") {
+                if let Ok(interval) = interval_str.parse::<u64>() {
+                    if let Some(mtws_service) = service.get_mtws_service_mut() {
+                        match mtws_service.set_transmission_interval(interval).await {
+                            Ok(_) => println!("✅ MTWS transmission interval set to {} seconds", interval),
+                            Err(e) => println!("❌ Failed to set interval: {}", e),
+                        }
+                    }
+                } else {
+                    println!("❌ Invalid interval value: {}", interval_str);
+                }
+            }
+        }
+        Some(("test", _)) => {
+            // Fix borrowing issue by splitting the operations
+            let mtws_available = service.get_mtws_service().is_some();
+            
+            if mtws_available {
+                // First read devices
+                service.read_all_devices_once().await?;
+                
+                // Then get MTWS service and test
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    let endpoint = mtws_service.get_endpoint_url();
+                    println!("🧪 Testing MTWS endpoint: {}", endpoint);
+                    
+                    match mtws_service.send_data_once().await {
+                        Ok(_) => println!("✅ Test successful - endpoint is reachable and accepting data"),
+                        Err(e) => println!("❌ Test failed: {}", e),
+                    }
+                }
+            } else {
+                println!("❌ MTWS service not available");
+            }
+        }
+        Some(("send", _)) => {
+            if let Some(mtws_service) = service.get_mtws_service() {
+                match mtws_service.send_data_once().await {
+                    Ok(_) => println!("✅ MTWS data sent successfully"),
+                    Err(e) => println!("❌ Failed to send MTWS data: {}", e),
+                }
+            } else {
+                println!("❌ MTWS service not available");
+            }
+        }
+        Some(("start", _)) => {
+            if let Some(mtws_service) = service.get_mtws_service() {
+                match mtws_service.start_transmission().await {
+                    Ok(_) => println!("✅ MTWS transmission started"),
                     Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
                 }
             } else {
-                match send_mtws_http_request::<(), serde_json::Value>("POST", "/api/mtws/start", None::<&()>).await {
-                    Ok(_) => println!("✅ MTWS transmission started successfully"),
-                    Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
-                }
+                println!("❌ MTWS service not available");
             }
-            Ok(())
         }
         Some(("stop", _)) => {
-            println!("🛑 Stopping MTWS transmission...");
-            
-            if let Some(api_service) = data_service.get_api_service() {
-                match api_service.stop_mtws_transmission().await {
-                    Ok(_) => println!("✅ MTWS transmission stopped successfully"),
+            if let Some(mtws_service) = service.get_mtws_service() {
+                match mtws_service.stop_transmission().await {
+                    Ok(_) => println!("✅ MTWS transmission stopped"),
                     Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
                 }
             } else {
-                match send_mtws_http_request::<(), serde_json::Value>("POST", "/api/mtws/stop", None::<&()>).await {
-                    Ok(_) => println!("✅ MTWS transmission stopped successfully"),
-                    Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
-                }
+                println!("❌ MTWS service not available");
             }
-            Ok(())
-        }
-        Some(("send", send_matches)) => {
-            let endpoint = send_matches.get_one::<String>("endpoint");
-            println!("📡 Sending single MTWS payload...");
-            
-            let payload = if let Some(endpoint_url) = endpoint {
-                serde_json::json!({
-                    "endpoint_url": endpoint_url
-                })
-            } else {
-                serde_json::json!({})
-            };
-            
-            if let Some(api_service) = data_service.get_api_service() {
-                match api_service.send_mtws_payload(endpoint.cloned()).await {
-                    Ok(_) => println!("✅ MTWS payload sent successfully"),
-                    Err(e) => println!("❌ Failed to send MTWS payload: {}", e),
-                }
-            } else {
-                match send_mtws_http_request::<_, serde_json::Value>("POST", "/api/mtws/send", Some(&payload)).await {
-                    Ok(_) => println!("✅ MTWS payload sent successfully"),
-                    Err(e) => println!("❌ Failed to send MTWS payload: {}", e),
-                }
-            }
-            Ok(())
         }
         Some(("status", _)) => {
-            println!("📊 MTWS Status:");
-            
-            if let Some(api_service) = data_service.get_api_service() {
-                match api_service.get_mtws_status().await {
-                    Ok(status) => {
-                        println!("  Status: {}", if status.is_running { "🟢 Running" } else { "🔴 Stopped" });
-                        println!("  Interval: {} seconds", status.interval_seconds);
-                        if let Some(url) = &status.endpoint_url {
-                            println!("  Endpoint: {}", url);
-                        }
-                        println!("  Enabled: {}", if status.enabled { "Yes" } else { "No" });
-                    }
-                    Err(e) => println!("❌ Failed to get MTWS status: {}", e),
-                }
+            if let Some(mtws_service) = service.get_mtws_service() {
+                let (is_running, interval, endpoint, enabled) = mtws_service.get_status().await;
+                
+                println!("📊 MTWS Service Status:");
+                println!("  Enabled: {}", if enabled { "🟢 Yes" } else { "🔴 No" });
+                println!("  Running: {}", if is_running { "🟢 Yes" } else { "🔴 No" });
+                println!("  IMEI: {}", mtws_service.get_imei());
+                println!("  Endpoint: {}", endpoint);
+                println!("  Interval: {} seconds", interval);
             } else {
-                match send_mtws_http_request::<(), serde_json::Value>("GET", "/api/mtws/status", None).await {
-                    Ok(response) => {
-                        if let Some(config) = response.get("config") {
-                            println!("  Status: {}", if config["is_running"].as_bool().unwrap_or(false) { "🟢 Running" } else { "🔴 Stopped" });
-                            println!("  Interval: {} seconds", config["interval_seconds"].as_u64().unwrap_or(0));
-                            if let Some(url) = config["endpoint_url"].as_str() {
-                                println!("  Endpoint: {}", url);
-                            }
-                            println!("  Enabled: {}", if config["enabled"].as_bool().unwrap_or(false) { "Yes" } else { "No" });
-                        } else {
-                            println!("  Unable to parse status response");
-                        }
-                    }
-                    Err(e) => println!("❌ Failed to get MTWS status: {}", e),
-                }
-            }
-            Ok(())
-        }
-        Some(("config", config_matches)) => {
-            match config_matches.subcommand() {
-                Some(("show", _)) => {
-                    println!("⚙️ MTWS Configuration:");
-                    
-                    match send_mtws_http_request::<(), serde_json::Value>("GET", "/api/mtws/config", None).await {
-                        Ok(response) => {
-                            if let Some(config) = response.get("config") {
-                                println!("  Enabled: {}", if config["enabled"].as_bool().unwrap_or(false) { "Yes" } else { "No" });
-                                println!("  Running: {}", if config["is_running"].as_bool().unwrap_or(false) { "Yes" } else { "No" });
-                                println!("  Interval: {} seconds", config["interval_seconds"].as_u64().unwrap_or(0));
-                                if let Some(url) = config["endpoint_url"].as_str() {
-                                    println!("  Endpoint: {}", url);
-                                }
-                            } else {
-                                println!("❌ Unable to parse configuration response");
-                            }
-                        }
-                        Err(e) => println!("❌ Failed to get MTWS configuration: {}", e),
-                    }
-                    Ok(())
-                }
-                Some(("set", set_matches)) => {
-                    let interval = set_matches.get_one::<String>("interval");
-                    let endpoint = set_matches.get_one::<String>("endpoint");
-                    
-                    let mut config_update = serde_json::Map::new();
-                    
-                    if let Some(interval_str) = interval {
-                        match interval_str.parse::<u64>() {
-                            Ok(interval_val) => {
-                                config_update.insert("interval_seconds".to_string(), serde_json::Value::Number(serde_json::Number::from(interval_val)));
-                                println!("🔧 Setting MTWS interval to {} seconds", interval_val);
-                            }
-                            Err(_) => {
-                                println!("❌ Invalid interval value: {}", interval_str);
-                                return Ok(());
-                            }
-                        }
-                    }
-                    
-                    if let Some(endpoint_url) = endpoint {
-                        config_update.insert("endpoint_url".to_string(), serde_json::Value::String(endpoint_url.clone()));
-                        println!("🔧 Setting MTWS endpoint to: {}", endpoint_url);
-                    }
-                    
-                    if config_update.is_empty() {
-                        println!("❌ No configuration parameters provided");
-                        println!("Usage: mtws config set --interval <seconds> --endpoint <url>");
-                        return Ok(());
-                    }
-                    
-                    let payload = serde_json::Value::Object(config_update);
-                    
-                    match send_mtws_http_request::<_, serde_json::Value>("PUT", "/api/mtws/config", Some(&payload)).await {
-                        Ok(_) => println!("✅ MTWS configuration updated successfully"),
-                        Err(e) => println!("❌ Failed to update MTWS configuration: {}", e),
-                    }
-                    Ok(())
-                }
-                _ => {
-                    println!("Available config commands:");
-                    println!("  show                              - Show current configuration");
-                    println!("  set --interval <sec> --endpoint <url> - Update configuration");
-                    Ok(())
-                }
+                println!("❌ MTWS service not available");
             }
         }
         _ => {
             println!("Available MTWS commands:");
-            println!("  start                             - Start automatic transmission");
-            println!("  stop                              - Stop automatic transmission");
-            println!("  send [--endpoint <url>]           - Send single payload");
-            println!("  status                            - Show service status");
-            println!("  config show                       - Show configuration");
-            println!("  config set --interval <sec> --endpoint <url> - Update config");
-            Ok(())
+            println!("  config --imei <IMEI>           Set device IMEI (15 digits)");
+            println!("  config --endpoint <URL>        Set base endpoint URL");
+            println!("  config --interval <SECONDS>    Set transmission interval");
+            println!("  start                          Start automatic transmission");
+            println!("  stop                           Stop automatic transmission");
+            println!("  send                           Send data immediately");
+            println!("  test                           Test endpoint connectivity");
+            println!("  status                         Show service status");
         }
     }
+    Ok(())
 }
 
 // Helper function to send HTTP requests to MTWS API

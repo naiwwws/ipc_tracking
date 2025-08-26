@@ -17,6 +17,8 @@ pub struct FlowmeterReading {
     pub temperature: f32,
     pub volume_flow_rate: f32,
     pub mass_total: f32,
+    pub mass_inventory: f32,
+    pub volume_inventory: f32,
     pub volume_total: f32,
     pub error_code: u16,
 }
@@ -117,6 +119,8 @@ impl FlowmeterReading {
             volume_flow_rate: flowmeter_data.volume_flow_rate,
             mass_total: flowmeter_data.mass_total,
             volume_total: flowmeter_data.volume_total,
+            mass_inventory: flowmeter_data.mass_inventory,
+            volume_inventory: flowmeter_data.volume_inventory,
             error_code: flowmeter_data.error_code,
         }
     }
@@ -142,7 +146,7 @@ impl MtwsPayload {
     }
     
     pub fn add_field(&mut self, name: String, value: String) {
-        self.fields.push(MtwsField::new(name, value));
+        self.fields.push(MtwsField { name, value });
     }
 }
 
@@ -239,4 +243,31 @@ pub struct EngineDurationHistory {
     pub is_running: bool,
     pub change_reason: String,
     pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MtwsConfig {
+    pub enabled: bool,
+    pub imei: String,
+    pub base_endpoint_url: String,
+    pub transmission_interval_seconds: u64,
+    pub timeout_seconds: u64,
+    pub retry_attempts: u32,
+    pub retry_delay_seconds: u64,
+    pub auto_start: bool,
+}
+
+impl Default for MtwsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            imei: "123456789012345".to_string(),
+            base_endpoint_url: "http://mtws.masihplayground.my.id:80/SubmitForm".to_string(),
+            transmission_interval_seconds: 300,
+            timeout_seconds: 30,
+            retry_attempts: 3,
+            retry_delay_seconds: 60,
+            auto_start: false,
+        }
+    }
 }

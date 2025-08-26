@@ -354,58 +354,6 @@ async fn handle_set_command(
     Ok(true)
 }
 
-// Handle add command - adds new device
-async fn handle_add_command(
-    matches: &ArgMatches,
-    config_manager: &DynamicConfigManager,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let address: u8 = matches.get_one::<String>("address").unwrap().parse().map_err(|_| {
-        "Invalid device address"
-    })?;
-    
-    let operator = matches.get_one::<String>("operator").unwrap_or(&"CLI".to_string()).clone();
-
-    let mut parameters = HashMap::new();
-    
-    if let Some(device_id) = matches.get_one::<String>("device-id") {
-        parameters.insert("device_id".to_string(), device_id.clone());
-    }
-    
-    if let Some(device_type) = matches.get_one::<String>("device-type") {
-        parameters.insert("device_type".to_string(), device_type.clone());
-    }
-    
-    if let Some(name) = matches.get_one::<String>("name") {
-        parameters.insert("name".to_string(), name.clone());
-    }
-    
-    if let Some(location) = matches.get_one::<String>("location") {
-        parameters.insert("location".to_string(), location.clone());
-    }
-
-    let command = ConfigurationCommand {
-        command_id: Uuid::new_v4().to_string(),
-        timestamp: Utc::now(),
-        operator,
-        command_type: ConfigCommandType::Add,
-        target: ConfigTarget::Device { address },
-        parameters,
-        apply_immediately: true,
-    };
-
-    let response = config_manager.execute_command(command).await;
-    
-    if response.success {
-        println!(" {}", response.message);
-        if response.requires_restart {
-            println!("⚠️  Service restart required to activate new device");
-        }
-    } else {
-        println!("❌ Failed to add device: {}", response.message);
-    }
-
-    Ok(true)
-}
 
 // Handle enable command - enables device
 async fn handle_enable_command(

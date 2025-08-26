@@ -87,6 +87,8 @@ impl SqliteManager {
                 temperature REAL NOT NULL,
                 volume_flow_rate REAL NOT NULL,
                 mass_total REAL NOT NULL,
+                mass_inventory REAL NOT NULL,
+                volume_inventory REAL NOT NULL,
                 volume_total REAL NOT NULL,
                 error_code INTEGER NOT NULL DEFAULT 0
             )
@@ -366,8 +368,8 @@ impl SqliteManager {
             let result = sqlx::query(r#"
                 INSERT INTO flowmeter_readings (
                     device_address, unix_timestamp, mass_flow_rate, density_flow, 
-                    temperature, volume_flow_rate, mass_total, volume_total, error_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    temperature, volume_flow_rate, mass_total, volume_total, mass_inventory, volume_inventory, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#)
             .bind(reading.device_address)
             .bind(reading.unix_timestamp)
@@ -377,6 +379,9 @@ impl SqliteManager {
             .bind(reading.volume_flow_rate)
             .bind(reading.mass_total)
             .bind(reading.volume_total)
+            .bind(reading.mass_inventory)
+            .bind(reading.volume_inventory)
+            .bind(reading.volume_inventory)
             .bind(reading.error_code)
             .execute(&mut *tx)
             .await;

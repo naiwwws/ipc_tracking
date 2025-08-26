@@ -12,7 +12,7 @@ use crate::modbus::ModbusClient;
 use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice}; // Add RpmDevice
 use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
-use crate::services::DatabaseService;
+use crate::services::{DatabaseService, MtwsService};
 use crate::utils::error::ModbusError;
 use tokio::sync::Mutex as TokioMutex;
 use crate::devices::gps::{GpsService, GpsData};
@@ -30,6 +30,8 @@ pub struct DataService {
     polling_handle: Arc<TokioMutex<Option<tokio::task::JoinHandle<()>>>>,
     // NEW: GPS service
     gps_service: Option<GpsService>,
+    // NEW: MTWS service
+    mtws_service: Option<MtwsService>,
 }
 
 
@@ -61,6 +63,7 @@ impl Clone for DataService {
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
             gps_service: self.gps_service.clone(), // NEW field
+            mtws_service: self.mtws_service.clone(), // NEW field
         }
     }
 }
@@ -168,6 +171,9 @@ impl DataService {
             None
         };
 
+        // Initialize MTWS service if enabled
+        let mtws_service = None; // Initialize as None, will be set later
+
         // Create the DataService instance with new fields
         let data_service = Self {
             config,
@@ -179,12 +185,36 @@ impl DataService {
             formatter,
             senders,
             database_service,
-           
             polling_handle: Arc::new(TokioMutex::new(None)),
             gps_service,
+            mtws_service,
         };
 
         Ok(data_service)
+    }
+
+    // Add separate initialization method
+    pub fn initialize_mtws(&mut self) -> Result<(), ModbusError> {
+        if self.config.mtws.enabled {
+            // Create a minimal DataService reference for MTWS
+            let data_service_for_mtws = Arc::new(DataService {
+                config: self.config.clone(),
+                devices: Vec::new(),
+                device_data: Arc::clone(&self.device_data),
+                device_data_by_address: Arc::clone(&self.device_data_by_address),
+                device_address_to_uuid: self.device_address_to_uuid.clone(),
+                modbus_client: Arc::clone(&self.modbus_client),
+                formatter: Box::new(ConsoleFormatter),
+                senders: Vec::new(),
+                database_service: None,
+                polling_handle: Arc::new(TokioMutex::new(None)),
+                gps_service: None,
+                mtws_service: None,
+            });
+            
+            self.mtws_service = Some(MtwsService::new(data_service_for_mtws, self.config.clone()));
+        }
+        Ok(())
     }
 
     //  Helper method to get device config by address
@@ -383,10 +413,9 @@ impl DataService {
     pub async fn get_device_data_by_address(&self, device_address: u8) -> Option<String> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
             if let Some(device_data) = address_map.get(&device_address) {
-                // Convert device data to JSON string
                 let json_value = device_data.to_json();
                 let json_string = serde_json::to_string(&json_value).ok()?;
-                info!("📊 Retrieved device data for address {}: {}", device_address, json_string);
+                info!("📊 Retrieved device data for address {}: length data {}", device_address, json_string.len());
                 return Some(json_string);
             }
         }
@@ -612,5 +641,14 @@ impl DataService {
             }
         }
         None
+    }
+
+    // Add method to get MTWS service
+    pub fn get_mtws_service(&self) -> Option<&MtwsService> {
+        self.mtws_service.as_ref()
+    }
+
+    pub fn get_mtws_service_mut(&mut self) -> Option<&mut MtwsService> {
+        self.mtws_service.as_mut()
     }
 }
