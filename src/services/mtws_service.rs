@@ -233,8 +233,6 @@ impl MtwsService {
             payload.add_field("heading".to_string(), "0".to_string());
             payload.add_field("altitude".to_string(), "0".to_string());
             payload.add_field("gpsNumSats".to_string(), "0".to_string());
-            payload.add_field("gpsHDOP".to_string(), "99.99".to_string());
-            payload.add_field("gpsFixType".to_string(), "No fix".to_string());
             warn!("⚠️ No GPS data available, using cloud-format default values");
         }
 

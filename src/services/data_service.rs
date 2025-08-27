@@ -147,7 +147,7 @@ impl DataService {
         let mut senders: Vec<Box<dyn DataSender>> = Vec::new();
         senders.push(Box::new(ConsoleSender));
 
-        // Initialize GPS service if enabled
+        // Initialize GPS service if enabled WITH IMMEDIATE START
         let gps_service = if config.gps.enabled {
             info!("🧭 Initializing GPS service on port {}", config.gps.port);
             let gps_service = GpsService::new(
@@ -155,13 +155,19 @@ impl DataService {
                 config.gps.baud_rate,
             );
             
-            // Auto-start if configured
-            if config.gps.auto_start {
-                if let Err(e) = gps_service.start().await {
-                    warn!("⚠️ Failed to auto-start GPS service: {}", e);
-                } else {
-                    info!("🧭 GPS service auto-started");
-                }
+            // ALWAYS auto-start GPS for continuous reading
+            info!("🧭 Starting GPS service with continuous reading...");
+            if let Err(e) = gps_service.start().await {
+                warn!("⚠️ Failed to auto-start GPS service: {}", e);
+            } else {
+                info!("✅ GPS service started with continuous reading");
+                
+                // Give GPS time to initialize and get first fix
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                
+                // Check initial status
+                let status = gps_service.get_status().await;
+                info!("🧭 GPS service status: {}", status);
             }
             
             Some(gps_service)
@@ -268,10 +274,19 @@ impl DataService {
             info!("📝 Database storage: DISABLED");
         }
 
-        // Ensure GPS service is running if enabled
+        // Start GPS service with continuous reading if enabled
         if self.gps_service.is_some() {
             match self.ensure_gps_service_running().await {
-                Ok(_) => info!("🧭 GPS service verified and running"),
+                Ok(_) => {
+                    info!("🧭 GPS service started with continuous reading");
+                    // Wait a bit more for GPS to stabilize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    
+                    // Check initial GPS status
+                    if let Ok(status) = self.get_gps_status().await {
+                        info!("🧭 GPS Initial Status: {}", status);
+                    }
+                }
                 Err(e) => warn!("⚠️ GPS service issue: {}", e),
             }
         }
@@ -303,7 +318,7 @@ impl DataService {
         info!("⏱️  Update interval: {} seconds", self.config.update_interval_seconds);
         info!("🛑 Press Ctrl+C to stop the service");
         
-        // FIXED: Keep the service running with signal handling
+        // Keep the service running with signal handling and GPS monitoring
         let mut gps_check_counter = 0;
         let update_interval = tokio::time::Duration::from_secs(self.config.update_interval_seconds);
         
@@ -340,15 +355,23 @@ impl DataService {
                         error!("❌ Failed to read devices: {}", e);
                     }
                     
-                    // Check GPS health every 10 cycles (adjust as needed)
+                    // Check GPS health more frequently (every 3 cycles instead of 10)
                     gps_check_counter += 1;
-                    if gps_check_counter >= 10 {
+                    if gps_check_counter >= 3 {
                         gps_check_counter = 0;
                         
-                        if self.gps_service.is_some() {
-                            match self.ensure_gps_service_running().await {
-                                Ok(_) => {} // GPS is fine
-                                Err(e) => warn!("⚠️ GPS health check failed: {}", e),
+                        if let Some(gps_service) = &self.gps_service {
+                            // Check if GPS service is still running
+                            if !gps_service.is_running().await {
+                                warn!("⚠️ GPS service stopped running, restarting...");
+                                if let Err(e) = self.ensure_gps_service_running().await {
+                                    error!("❌ Failed to restart GPS service: {}", e);
+                                }
+                            } else {
+                                // Periodic status check
+                                if let Ok(status) = self.get_gps_status().await {
+                                    debug!("🧭 GPS Status Check: {}", status);
+                                }
                             }
                         }
                     }
@@ -620,28 +643,40 @@ impl DataService {
     // SINGLE get_current_gps_data method with enhanced error handling
     pub async fn get_current_gps_data(&self) -> Option<GpsData> {
         if let Some(gps_service) = &self.gps_service {
-            // First try to get fresh GPS fix
+            // Ensure GPS service is running
+            if let Err(e) = self.ensure_gps_service_running().await {
+                warn!("⚠️ Failed to ensure GPS service running: {}", e);
+                return None;
+            }
+
+            // Try to get current GPS data (from continuous reading)
             match gps_service.get_current_gps_fix().await {
                 Ok(Some(data)) => {
-                    info!("🧭 Fresh GPS fix: lat={:?}, lon={:?}, speed={:?}, sats={:?}", 
-                          data.latitude, data.longitude, data.speed, data.satellites);
+                    debug!("🧭 Got GPS data from continuous reading: lat={:?}, lon={:?}, age={}s", 
+                          data.latitude, data.longitude, 
+                          chrono::Utc::now().timestamp() - data.timestamp.unwrap_or(0));
                     return Some(data);
                 }
                 Ok(None) => {
-                    info!("🧭 No fresh GPS fix available, trying last known data");
+                    debug!("🧭 No current GPS fix, trying force read...");
                     
-                    // Fallback to last known data
-                    let last_data = gps_service.get_current_data().await;
-                    if last_data.has_valid_fix() {
-                        info!("🧭 Using last known GPS data: lat={:?}, lon={:?}", 
-                              last_data.latitude, last_data.longitude);
-                        return Some(last_data);
-                    } else {
-                        warn!("⚠️ Last known GPS data is invalid or too old");
+                    // Try force read as fallback
+                    match gps_service.force_read().await {
+                        Ok(Some(data)) => {
+                            info!("🧭 Got GPS data from force read: lat={:?}, lon={:?}", 
+                                  data.latitude, data.longitude);
+                            return Some(data);
+                        }
+                        Ok(None) => {
+                            warn!("⚠️ Force read returned no GPS data");
+                        }
+                        Err(e) => {
+                            warn!("⚠️ Force read failed: {}", e);
+                        }
                     }
                 }
                 Err(e) => {
-                    warn!("⚠️ Failed to get GPS fix: {}", e);
+                    warn!("⚠️ Failed to get GPS data: {}", e);
                 }
             }
         } else {
@@ -653,14 +688,15 @@ impl DataService {
     // Ensure GPS service is running without reinitializing
     pub async fn ensure_gps_service_running(&self) -> Result<(), ModbusError> {
         if let Some(gps_service) = &self.gps_service {
-            let status = gps_service.get_status().await;
+            let is_running = gps_service.is_running().await;
             
-            if !status.contains("Connected") && !status.contains("Reading") {
-                info!("🧭 GPS service not running, attempting to start...");
+            if !is_running {
+                info!("🧭 GPS service not running, starting continuous GPS reading...");
                 match gps_service.start().await {
                     Ok(_) => {
-                        info!("✅ GPS service started successfully");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        info!("✅ GPS service started with continuous reading");
+                        // Give GPS service time to establish connection and get first fix
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     }
                     Err(e) => {
                         warn!("⚠️ Failed to start GPS service: {}", e);
@@ -668,7 +704,8 @@ impl DataService {
                     }
                 }
             } else {
-                info!("🧭 GPS service already running: {}", status);
+                let status = gps_service.get_status().await;
+                debug!("🧭 GPS service running: {}", status);
             }
             
             Ok(())
@@ -682,14 +719,17 @@ impl DataService {
         if let Some(gps_service) = &self.gps_service {
             let status = gps_service.get_status().await;
             let current_data = gps_service.get_current_data().await;
+            let is_running = gps_service.is_running().await;
             
             let detailed_status = format!(
-                "GPS Status: {} | Valid Fix: {} | Coordinates: ({:?}, {:?}) | Satellites: {:?}",
+                "GPS Service: {} | Running: {} | Valid Fix: {} | Coordinates: ({:.6}, {:.6}) | Satellites: {} | Data Age: {}s",
                 status,
+                is_running,
                 current_data.has_valid_fix(),
-                current_data.latitude,
-                current_data.longitude,
-                current_data.satellites
+                current_data.latitude.unwrap_or(0.0),
+                current_data.longitude.unwrap_or(0.0),
+                current_data.satellites.unwrap_or(0),
+                chrono::Utc::now().timestamp() - current_data.timestamp.unwrap_or(0)
             );
             
             Ok(detailed_status)
