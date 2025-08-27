@@ -53,17 +53,17 @@ impl Clone for DataService {
 
         Self {
             config: self.config.clone(),
-            devices: cloned_devices, // Use properly cloned devices
+            devices: cloned_devices,
             device_data: self.device_data.clone(),
-            device_data_by_address: self.device_data_by_address.clone(), // NEW field
+            device_data_by_address: self.device_data_by_address.clone(),
             device_address_to_uuid: self.device_address_to_uuid.clone(),
             modbus_client: self.modbus_client.clone(),
             formatter: Box::new(ConsoleFormatter),
             senders: Vec::new(),
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
-            gps_service: self.gps_service.clone(), // NEW field
-            mtws_service: self.mtws_service.clone(), // NEW field
+            gps_service: self.gps_service.clone(),
+            mtws_service: None, // Don't clone MTWS service to avoid circular references
         }
     }
 }
@@ -196,23 +196,7 @@ impl DataService {
     // Add separate initialization method
     pub fn initialize_mtws(&mut self) -> Result<(), ModbusError> {
         if self.config.mtws.enabled {
-            // Create a minimal DataService reference for MTWS
-            let data_service_for_mtws = Arc::new(DataService {
-                config: self.config.clone(),
-                devices: Vec::new(),
-                device_data: Arc::clone(&self.device_data),
-                device_data_by_address: Arc::clone(&self.device_data_by_address),
-                device_address_to_uuid: self.device_address_to_uuid.clone(),
-                modbus_client: Arc::clone(&self.modbus_client),
-                formatter: Box::new(ConsoleFormatter),
-                senders: Vec::new(),
-                database_service: None,
-                polling_handle: Arc::new(TokioMutex::new(None)),
-                gps_service: None,
-                mtws_service: None,
-            });
-            
-            self.mtws_service = Some(MtwsService::new(data_service_for_mtws, self.config.clone()));
+            self.mtws_service = Some(MtwsService::new(self.config.clone())); // Only pass config
         }
         Ok(())
     }
@@ -693,5 +677,45 @@ impl DataService {
         
     pub fn has_mtws_service(&self) -> bool {
         self.mtws_service.is_some()
+    }
+    // Fix MTWS service initialization
+    pub fn initialize_mtws_service(&mut self) -> Result<(), ModbusError> {
+        if !self.config.mtws.enabled {
+            self.mtws_service = None;
+            return Ok(());
+        }
+
+        info!("🛰️ Initializing MTWS service...");
+        
+        // Create MTWS service with just the config
+        let mtws_service = crate::services::mtws_service::MtwsService::new(
+            self.config.clone()
+        );
+        
+        self.mtws_service = Some(mtws_service);
+        info!("✅ MTWS service initialized");
+        
+        Ok(())
+    }
+
+    // Add method to get current device data for MTWS
+    pub async fn get_current_device_data(&mut self) -> HashMap<String, String> {
+        // Read fresh data from all devices
+        if let Err(e) = self.read_all_devices_once().await {
+            warn!("⚠️ Failed to read fresh device data: {}", e);
+        }
+        
+        // Return current data as JSON strings instead of trait objects
+        let mut result = HashMap::new();
+        if let Ok(data) = self.device_data.lock() {
+            for (uuid, device_data) in data.iter() {
+                let json_value = device_data.to_json();
+                if let Ok(json_string) = serde_json::to_string(&json_value) {
+                    result.insert(uuid.clone(), json_string);
+                }
+            }
+        }
+        
+        result
     }
 }

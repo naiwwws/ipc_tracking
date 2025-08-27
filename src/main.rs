@@ -9,7 +9,7 @@ mod storage;
 
 use anyhow::Result;
 use clap::{Arg, Command, ArgAction, ArgMatches}; // Add ArgMatches here
-use log::info;
+use log::{info, warn};
 
 use services::{DataService, ApiService}; // Fixed import
 use crate::services::api_service::ApiServiceState;
@@ -604,10 +604,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_enabled = config.output.database_output.as_ref().map(|db| db.enabled).unwrap_or(false);
     info!("  Database: {}", if db_enabled { "enabled" } else { "disabled" });
 
+    // Initialize DataService
     let mut service = DataService::new(config.clone()).await?;
-    let mut api_service_handle: Option<crate::services::ApiService> = None;
+    
+    // Initialize MTWS service if enabled
+    if config.mtws.enabled {
+        if let Err(e) = service.initialize_mtws_service() {
+            warn!("⚠️ Failed to initialize MTWS service: {}", e);
+        } else {
+            info!("🛰️ MTWS service initialized successfully");
+            
+            // Auto-start MTWS if configured
+            if config.mtws.auto_start {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.start_transmission().await {
+                        Ok(_) => {
+                            info!("✅ MTWS transmission auto-started");
+                            info!("📡 Sending to: {}", config.get_mtws_endpoint_url());
+                            info!("⏱️ Interval: {} seconds", config.mtws.transmission_interval_seconds);
+                        }
+                        Err(e) => {
+                            warn!("❌ Failed to auto-start MTWS: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // ✅ FIXED: Start API service based on TOML config, not just CLI
+    let mut api_service_handle: Option<crate::services::ApiService> = None;
     if config.api_server.enabled {
         if let Some(db_service) = service.get_database_service() {
             let sqlite_manager = db_service.get_sqlite_manager().clone();

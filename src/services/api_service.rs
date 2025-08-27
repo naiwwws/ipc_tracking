@@ -49,9 +49,9 @@ pub struct ApiServiceState {
 
 impl ApiServiceState {
     pub fn new(config: Config, sqlite_manager: SqliteManager, data_service: Option<Arc<DataService>>) -> Self {
-        // Create MTWS service if data service is available
-        let mtws_service = if let Some(data_svc) = &data_service {
-            Some(Arc::new(tokio::sync::Mutex::new(MtwsService::new(data_svc.clone(), config.clone()))))
+        // Create MTWS service if enabled
+        let mtws_service = if config.mtws.enabled {
+            Some(Arc::new(tokio::sync::Mutex::new(MtwsService::new(config.clone())))) // Only pass config
         } else {
             None
         };
@@ -219,8 +219,8 @@ async fn configure_mtws(
     config: web::Json<MtwsConfig>,
 ) -> ActixResult<HttpResponse> {
     if let Some(mtws_service) = &data.mtws_service {
-        // Lock the mutex to get mutable access
-        let mut mtws_service = mtws_service.lock().await;
+        // Remove the mut since we don't need it
+        let mtws_service = mtws_service.lock().await;
         if let Err(e) = mtws_service.set_transmission_interval(config.interval_seconds).await {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
