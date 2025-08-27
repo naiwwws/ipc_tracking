@@ -6,6 +6,7 @@ use tokio::fs;
 use tokio::time::{sleep, interval, Duration};
 use tokio::sync::mpsc;
 use serde_json::json;
+use tokio::signal;
 
 use crate::config::{Config, DeviceConfig}; // Add DeviceConfig import
 use crate::modbus::ModbusClient;
@@ -300,32 +301,62 @@ impl DataService {
         
         info!("✅ Service started successfully");
         info!("⏱️  Update interval: {} seconds", self.config.update_interval_seconds);
+        info!("🛑 Press Ctrl+C to stop the service");
         
-        // Keep the service running with periodic GPS health checks
+        // FIXED: Keep the service running with signal handling
         let mut gps_check_counter = 0;
+        let update_interval = tokio::time::Duration::from_secs(self.config.update_interval_seconds);
         
         loop {
-            // Periodic device reading for MTWS and other services
-            if let Err(e) = self.read_all_devices_once().await {
-                error!("❌ Failed to read devices: {}", e);
-            }
-            
-            // Check GPS health every 10 cycles (adjust as needed)
-            gps_check_counter += 1;
-            if gps_check_counter >= 10 {
-                gps_check_counter = 0;
+            tokio::select! {
+                // Handle Ctrl+C signal
+                _ = signal::ctrl_c() => {
+                    info!("🛑 Received Ctrl+C signal, shutting down gracefully...");
+                    
+                    // Stop MTWS service if running
+                    if let Some(mtws_service) = &self.mtws_service {
+                        if let Err(e) = mtws_service.stop_transmission().await {
+                            warn!("⚠️ Failed to stop MTWS service: {}", e);
+                        } else {
+                            info!("🛰️ MTWS service stopped");
+                        }
+                    }
+                    
+                    // Stop GPS service if running
+                    if let Err(e) = self.stop_gps_service().await {
+                        warn!("⚠️ Failed to stop GPS service: {}", e);
+                    } else {
+                        info!("🧭 GPS service stopped");
+                    }
+                    
+                    info!("✅ Service shutdown completed");
+                    break;
+                }
                 
-                if self.gps_service.is_some() {
-                    match self.ensure_gps_service_running().await {
-                        Ok(_) => {} // GPS is fine
-                        Err(e) => warn!("⚠️ GPS health check failed: {}", e),
+                // Regular device reading cycle
+                _ = tokio::time::sleep(update_interval) => {
+                    // Periodic device reading for MTWS and other services
+                    if let Err(e) = self.read_all_devices_once().await {
+                        error!("❌ Failed to read devices: {}", e);
+                    }
+                    
+                    // Check GPS health every 10 cycles (adjust as needed)
+                    gps_check_counter += 1;
+                    if gps_check_counter >= 10 {
+                        gps_check_counter = 0;
+                        
+                        if self.gps_service.is_some() {
+                            match self.ensure_gps_service_running().await {
+                                Ok(_) => {} // GPS is fine
+                                Err(e) => warn!("⚠️ GPS health check failed: {}", e),
+                            }
+                        }
                     }
                 }
             }
-            
-            // Wait for next cycle
-            tokio::time::sleep(tokio::time::Duration::from_secs(self.config.update_interval_seconds)).await;
         }
+        
+        Ok(())
     }
 
     // Fixed read_all_devices_once method

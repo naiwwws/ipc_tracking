@@ -174,42 +174,68 @@ impl MtwsService {
         // 1. Add timestamp
         payload.add_field("timestamp".to_string(), Utc::now().timestamp().to_string());
 
-        // 2. Add GPS data with DECIMAL formatting (not integer)
+        // 2. CLOUD-COMPATIBLE GPS data processing with proper multipliers
         if let Some(gps_data) = data_service.get_current_gps_data().await {
-            // Format GPS coordinates as decimal strings with 6 decimal places
-            let longitude_str = if let Some(lon) = gps_data.longitude {
-                format!("{:.6}", lon)
+            // LATITUDE & LONGITUDE: multiply by 60000 (as integers)
+            let longitude_cloud = if let Some(lon) = gps_data.longitude {
+                (lon * 60000.0) as i64
             } else {
-                "0.000000".to_string()
+                0
             };
             
-            let latitude_str = if let Some(lat) = gps_data.latitude {
-                format!("{:.6}", lat)
+            let latitude_cloud = if let Some(lat) = gps_data.latitude {
+                (lat * 60000.0) as i64
             } else {
-                "0.000000".to_string()
+                0
             };
 
-            payload.add_field("longitude".to_string(), longitude_str);
-            payload.add_field("latitude".to_string(), latitude_str);
-            payload.add_field("speed".to_string(), format!("{:.2}", gps_data.speed.unwrap_or(0.0)));
-            payload.add_field("heading".to_string(), format!("{:.1}", gps_data.course.unwrap_or(0.0)));
-            payload.add_field("altitude".to_string(), format!("{:.1}", gps_data.altitude.unwrap_or(0.0)));
+            // HEADING & ALTITUDE: multiply by 10 (as integers)
+            let heading_cloud = if let Some(course) = gps_data.course {
+                (course * 10.0) as i32
+            } else {
+                0
+            };
+
+            let altitude_cloud = if let Some(altitude) = gps_data.altitude {
+                (altitude * 10.0) as i32
+            } else {
+                0
+            };
+
+            // SPEED: keep as decimal with 2 decimal places
+            let speed_cloud = if let Some(speed_knots) = gps_data.speed {
+                // Convert knots to km/h and format with 2 decimals
+                format!("{:.2}", speed_knots * 1.852)
+            } else {
+                "0.00".to_string()
+            };
+
+            // Add fields with cloud-expected format
+            payload.add_field("longitude".to_string(), longitude_cloud.to_string());
+            payload.add_field("latitude".to_string(), latitude_cloud.to_string());
+            payload.add_field("speed".to_string(), speed_cloud);
+            payload.add_field("heading".to_string(), heading_cloud.to_string());
+            payload.add_field("altitude".to_string(), altitude_cloud.to_string());
             payload.add_field("gpsNumSats".to_string(), gps_data.satellites.unwrap_or(0).to_string());
-            
-            info!("📍 Added decimal GPS data: lat={:.6}, lon={:.6}, speed={:.2}, sats={}", 
-                  gps_data.latitude.unwrap_or(0.0), 
-                  gps_data.longitude.unwrap_or(0.0),
-                  gps_data.speed.unwrap_or(0.0), 
-                  gps_data.satellites.unwrap_or(0));
+              
+            // Log original values for debugging
+            info!("🔍 Original GPS values: lat={:.6}°, lon={:.6}°, speed={:.2}kts, heading={:.1}°, alt={:.1}m", 
+                   gps_data.latitude.unwrap_or(0.0), 
+                   gps_data.longitude.unwrap_or(0.0),
+                   gps_data.speed.unwrap_or(0.0),
+                   gps_data.course.unwrap_or(0.0),
+                   gps_data.altitude.unwrap_or(0.0));
         } else {
-            // Default GPS values when no GPS available
-            payload.add_field("longitude".to_string(), "0.000000".to_string());
-            payload.add_field("latitude".to_string(), "0.000000".to_string());
+            // Default values when no GPS available
+            payload.add_field("longitude".to_string(), "0".to_string());
+            payload.add_field("latitude".to_string(), "0".to_string());
             payload.add_field("speed".to_string(), "0.00".to_string());
-            payload.add_field("heading".to_string(), "0.0".to_string());
-            payload.add_field("altitude".to_string(), "0.0".to_string());
+            payload.add_field("heading".to_string(), "0".to_string());
+            payload.add_field("altitude".to_string(), "0".to_string());
             payload.add_field("gpsNumSats".to_string(), "0".to_string());
-            warn!("⚠️ No GPS data available, using default decimal values");
+            payload.add_field("gpsHDOP".to_string(), "99.99".to_string());
+            payload.add_field("gpsFixType".to_string(), "No fix".to_string());
+            warn!("⚠️ No GPS data available, using cloud-format default values");
         }
 
         // 3. Add power/battery data
