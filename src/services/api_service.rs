@@ -18,7 +18,7 @@ pub enum FlowType {
 }
 
 // MTWS API Request/Response types
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MtwsConfig {
     pub interval_seconds: u64,
     pub endpoint_url: String,
@@ -49,9 +49,12 @@ pub struct ApiServiceState {
 
 impl ApiServiceState {
     pub fn new(config: Config, sqlite_manager: SqliteManager, data_service: Option<Arc<DataService>>) -> Self {
-        // Create MTWS service if enabled
-        let mtws_service = if config.mtws.enabled {
-            Some(Arc::new(tokio::sync::Mutex::new(MtwsService::new(config.clone())))) // Only pass config
+        // Create MTWS service if enabled and data_service is available
+        let mtws_service = if config.mtws.enabled && data_service.is_some() {
+            let data_service_arc = data_service.as_ref().unwrap().clone();
+            Some(Arc::new(tokio::sync::Mutex::new(
+                MtwsService::new(data_service_arc, config.clone())
+            )))
         } else {
             None
         };
@@ -100,7 +103,6 @@ impl ApiService {
                     web::scope("/api")
                         .route("/health", web::get().to(health_check))
                         // New combined data endpoints
-                        // .route("/data/combined", web::get().to(send_combined_data))
                         .route("/data/send", web::post().to(send_combined_data))
                         .service(
                             web::scope("/mtws")
@@ -219,23 +221,37 @@ async fn configure_mtws(
     config: web::Json<MtwsConfig>,
 ) -> ActixResult<HttpResponse> {
     if let Some(mtws_service) = &data.mtws_service {
-        // Remove the mut since we don't need it
-        let mtws_service = mtws_service.lock().await;
-        if let Err(e) = mtws_service.set_transmission_interval(config.interval_seconds).await {
-            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                success: false,
-                error: format!("Failed to set transmission interval: {}", e),
-                code: "SET_INTERVAL_FAILED".to_string(),
-                timestamp: Utc::now(),
-            }));
-        }
+        let mtws = mtws_service.lock().await;
         
-        Ok(HttpResponse::Ok().json(serde_json::json!({
-            "success": true,
-            "message": "MTWS service configured successfully",
-            "interval_seconds": config.interval_seconds,
-            "endpoint_url": config.endpoint_url
-        })))
+        // Convert MtwsConfig to serde_json::Value
+        let config_value = match serde_json::to_value(config.into_inner()) {
+            Ok(val) => val,
+            Err(e) => {
+                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                    success: false,
+                    error: format!("Failed to serialize config: {}", e),
+                    code: "SERIALIZE_FAILED".to_string(),
+                    timestamp: Utc::now(),
+                }));
+            }
+        };
+        
+        match mtws.update_config(config_value).await {
+            Ok(_) => {
+                Ok(HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "message": "MTWS service configured successfully"
+                })))
+            }
+            Err(e) => {
+                Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                    success: false,
+                    error: format!("Failed to configure MTWS: {}", e),
+                    code: "CONFIG_FAILED".to_string(),
+                    timestamp: Utc::now(),
+                }))
+            }
+        }
     } else {
         Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
             success: false,
@@ -313,10 +329,10 @@ async fn send_mtws_payload(
             mtws.get_endpoint_url()
         });
         match mtws.send_single_payload(endpoint).await {
-            Ok(payload) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            Ok(payload_summary) => Ok(HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "message": "MTWS payload sent successfully",
-                "payload": payload
+                "payload_summary": payload_summary
             }))),
             Err(e) => Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,

@@ -171,15 +171,12 @@ impl DataService {
             None
         };
 
-        // Initialize MTWS service if enabled
-        let mtws_service = None; // Initialize as None, will be set later
-
-        // Create the DataService instance with new fields
-        let data_service = Self {
-            config,
+        // Create the DataService instance first
+        let mut data_service = Self {
+            config: config.clone(),
             devices,
             device_data: Arc::new(Mutex::new(HashMap::new())),
-            device_data_by_address: Arc::new(Mutex::new(HashMap::new())), // Initialize this
+            device_data_by_address: Arc::new(Mutex::new(HashMap::new())),
             device_address_to_uuid,
             modbus_client,
             formatter,
@@ -187,17 +184,40 @@ impl DataService {
             database_service,
             polling_handle: Arc::new(TokioMutex::new(None)),
             gps_service,
-            mtws_service,
+            mtws_service: None, // Initialize as None first
         };
+
+        // Now initialize MTWS service if enabled
+        if config.mtws.enabled {
+            if let Err(e) = data_service.initialize_mtws_service() {
+                warn!("⚠️ Failed to initialize MTWS service: {}", e);
+            } else {
+                info!("🛰️ MTWS service initialized successfully");
+            }
+        }
 
         Ok(data_service)
     }
 
-    // Add separate initialization method
-    pub fn initialize_mtws(&mut self) -> Result<(), ModbusError> {
-        if self.config.mtws.enabled {
-            self.mtws_service = Some(MtwsService::new(self.config.clone())); // Only pass config
+    pub fn initialize_mtws_service(&mut self) -> Result<(), ModbusError> {
+        if !self.config.mtws.enabled {
+            self.mtws_service = None;
+            return Ok(());
         }
+
+        info!("🛰️ Initializing MTWS service...");
+        
+        // Create MTWS service with proper Arc<DataService> reference
+        let data_service_arc = Arc::new(self.clone());
+        
+        let mtws_service = crate::services::mtws_service::MtwsService::new(
+            data_service_arc,
+            self.config.clone()
+        );
+        
+        self.mtws_service = Some(mtws_service);
+        info!("✅ MTWS service initialized");
+        
         Ok(())
     }
 
@@ -442,8 +462,17 @@ impl DataService {
         None
     }
 
-    pub async fn reset_engine_duration(&self, _address: u8) -> Result<(), ModbusError> {
-        // Implementation would go here when needed
+    // Add missing method for engine duration tracking
+    pub async fn get_engine_durations(&self) -> HashMap<u8, i32> {
+        // TODO: Implement database storage and retrieval for engine durations
+        // For now, return empty map
+        HashMap::new()
+    }
+
+    // Add method to reset engine duration
+    pub async fn reset_engine_duration(&self, engine_address: u8) -> Result<(), ModbusError> {
+        // TODO: Implement engine duration reset in database
+        info!("🔄 Engine duration reset requested for address: {}", engine_address);
         Ok(())
     }
 
@@ -677,25 +706,6 @@ impl DataService {
         
     pub fn has_mtws_service(&self) -> bool {
         self.mtws_service.is_some()
-    }
-    // Fix MTWS service initialization
-    pub fn initialize_mtws_service(&mut self) -> Result<(), ModbusError> {
-        if !self.config.mtws.enabled {
-            self.mtws_service = None;
-            return Ok(());
-        }
-
-        info!("🛰️ Initializing MTWS service...");
-        
-        // Create MTWS service with just the config
-        let mtws_service = crate::services::mtws_service::MtwsService::new(
-            self.config.clone()
-        );
-        
-        self.mtws_service = Some(mtws_service);
-        info!("✅ MTWS service initialized");
-        
-        Ok(())
     }
 
     // Add method to get current device data for MTWS
