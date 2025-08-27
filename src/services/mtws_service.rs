@@ -22,13 +22,20 @@ pub struct MtwsService {
     client: Client,
 }
 
-// Add the missing FlowmeterValues struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FlowmeterValues {
     pub volume_total: f32,
     pub density_flow: f32,
     pub temperature: f32,
     pub mass_flow_rate: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EngineData {
+    pub rpm: u16,
+    pub duration: u32,
+    pub is_running: bool,
+    pub engine_type: String, // "main", "aux", "generator", etc.
 }
 
 impl MtwsService {
@@ -115,7 +122,6 @@ impl MtwsService {
         Ok(())
     }
 
-    // Fixed send_single_payload method with correct return type
     pub async fn send_single_payload(&self, endpoint_url: String) -> Result<String, ModbusError> {
         if !self.config.mtws.enabled {
             return Err(ModbusError::ServiceNotAvailable("MTWS service is disabled".to_string()));
@@ -124,8 +130,7 @@ impl MtwsService {
         info!("🛰️ Sending single MTWS payload to custom endpoint: {}", endpoint_url);
         let payload = Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
         
-        // Return a summary of the payload
-        Ok(format!("Sent payload with {} fields to {}", payload.fields.len(), endpoint_url))
+        Ok(format!("Sent MTWS payload with {} fields to {}", payload.fields.len(), endpoint_url))
     }
 
     async fn generate_and_send_payload(
@@ -135,22 +140,15 @@ impl MtwsService {
     ) -> Result<MtwsPayload, ModbusError> {
         let payload = Self::build_payload(data_service).await?;
         
-        // Build JSON payload for transmission
-        let mut json_payload = serde_json::Map::new();
-        for field in &payload.fields {
-            json_payload.insert(field.name.clone(), serde_json::Value::String(field.value.clone()));
-        }
-        let json_value = serde_json::Value::Object(json_payload);
-        
-        info!("🛰️ Sending MTWS JSON payload to {} with {} fields", endpoint_url, payload.fields.len());
-        info!("📊 Sample data: {}", serde_json::to_string_pretty(&json_value).unwrap_or_default().chars().take(200).collect::<String>());
-        
-        // Send payload as JSON (POST)
+        info!("🛰️ Sending MTWS structured payload to {} with {} fields", endpoint_url, payload.fields.len());
+        // Print payload summary for debugging
+        Self::print_current_payload_static(data_service).await.ok();
+
         let response = client
             .post(endpoint_url)
             .header("Content-Type", "application/json")
             .header("User-Agent", "IPC-Track-Device/1.0")
-            .json(&json_value)
+            .json(&payload)
             .timeout(Duration::from_secs(30))
             .send()
             .await
@@ -186,7 +184,6 @@ impl MtwsService {
             payload.add_field("gpsNumSats".to_string(), gps_data.satellites.unwrap_or(0).to_string());
             info!("📍 Added real GPS data: lat={:?}, lon={:?}, speed={:?}", gps_data.latitude, gps_data.longitude, gps_data.speed);
         } else {
-            // Default GPS values
             payload.add_field("longitude".to_string(), "0".to_string());
             payload.add_field("latitude".to_string(), "0".to_string());
             payload.add_field("speed".to_string(), "0".to_string());
@@ -204,9 +201,10 @@ impl MtwsService {
         payload.add_field("windSpeed".to_string(), "0".to_string());
         payload.add_field("windDirection".to_string(), "0".to_string());
 
-        // 5. FLEXIBLE FLOWMETER DATA - Dynamic reading from all configured devices
+        // 5. DYNAMIC FLOWMETER DATA - Read from config, no limits
         let flowmeter_devices = data_service.get_flowmeter_devices();
-        info!("🔍 Found {} configured flowmeter devices", flowmeter_devices.len());
+        let flowmeter_count = flowmeter_devices.len();
+        info!("🔍 Found {} configured flowmeter devices", flowmeter_count);
 
         let mut flowmeter_data_collected = HashMap::new();
 
@@ -218,7 +216,6 @@ impl MtwsService {
             info!("🌊 Processing flowmeter {} at address {} ({})", 
                   flowmeter_number, device_address, device_config.name);
 
-            // Try multiple methods to get flowmeter data
             let mut flowmeter_values = None;
 
             // Method 1: Direct flowmeter data access
@@ -230,7 +227,7 @@ impl MtwsService {
                     mass_flow_rate: flowmeter_data.mass_flow_rate,
                 });
                 
-                info!("✅ Method 1: Got fresh flowmeter {} data: VT={}, D={}, T={}, FR={}", 
+                info!("✅ Got fresh flowmeter {} data: VT={}, D={}, T={}, FR={}", 
                       flowmeter_number, 
                       flowmeter_data.volume_total,
                       flowmeter_data.density_flow,
@@ -249,127 +246,195 @@ impl MtwsService {
                     }
                 }
             }
-            // Method 3: Direct read from device data cache
             else {
                 warn!("⚠️ No data found for flowmeter {} (address {})", flowmeter_number, device_address);
             }
 
-            // Store the collected data
             if let Some(values) = flowmeter_values {
                 flowmeter_data_collected.insert(flowmeter_number, values);
             }
         }
 
-        // Add flowmeter data to payload - Flexible number of flowmeters
-        let max_flowmeters = if flowmeter_devices.is_empty() { 
-            4 // Default minimum for compatibility
-        } else {
-            std::cmp::max(4, flowmeter_devices.len()) // At least 4, or however many are configured
-        };
+        // Add flowmeter data dynamically based on actual device count
+        // Ensure minimum of 4 for legacy compatibility, but support unlimited
+        let max_flowmeters = std::cmp::max(4, flowmeter_count);
         
+        // Add all VolumeTotal fields
         for flowmeter_number in 1..=max_flowmeters {
             if let Some(values) = flowmeter_data_collected.get(&flowmeter_number) {
-                // Add real data from configured flowmeter
                 payload.add_field(
                     format!("flowmeterVolumeTotal{}", flowmeter_number),
                     values.volume_total.to_string()
                 );
+            } else {
+                payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), "0".to_string());
+            }
+        }
+
+        // Add all Density fields
+        for flowmeter_number in 1..=max_flowmeters {
+            if let Some(values) = flowmeter_data_collected.get(&flowmeter_number) {
                 payload.add_field(
                     format!("flowmeterDensity{}", flowmeter_number),
                     values.density_flow.to_string()
                 );
+            } else {
+                payload.add_field(format!("flowmeterDensity{}", flowmeter_number), "0".to_string());
+            }
+        }
+
+        // Add all Temperature fields
+        for flowmeter_number in 1..=max_flowmeters {
+            if let Some(values) = flowmeter_data_collected.get(&flowmeter_number) {
                 payload.add_field(
                     format!("flowmeterTemperature{}", flowmeter_number),
                     values.temperature.to_string()
                 );
+            } else {
+                payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), "0".to_string());
+            }
+        }
+
+        // Add all Flowrate fields
+        for flowmeter_number in 1..=max_flowmeters {
+            if let Some(values) = flowmeter_data_collected.get(&flowmeter_number) {
                 payload.add_field(
                     format!("flowmeterFlowrate{}", flowmeter_number),
                     values.mass_flow_rate.to_string()
                 );
-                
-                info!("📦 Added flowmeter {} to payload with REAL data (VT: {}, FR: {})", 
-                      flowmeter_number, values.volume_total, values.mass_flow_rate);
             } else {
-                // Add default values for unconfigured flowmeters
-                Self::add_default_flowmeter_values(&mut payload, flowmeter_number);
-                info!("📦 Added flowmeter {} to payload with DEFAULT values", flowmeter_number);
+                payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), "0".to_string());
             }
         }
 
-        // 6. Add RPM data from configured RPM devices
+        info!("📦 Added {} flowmeter devices (with {} minimum for compatibility)", flowmeter_count, max_flowmeters);
+
+        // 6. Add fuel level
+        payload.add_field("fuelLevelMM".to_string(), "0".to_string());
+
+        // 7. DYNAMIC RPM/ENGINE DATA - Read all RPM devices from config
         let rpm_devices = data_service.get_rpm_devices();
-        info!("🔍 Found {} configured RPM devices", rpm_devices.len());
+        let rpm_device_count = rpm_devices.len();
+        info!("🔍 Found {} configured RPM devices", rpm_device_count);
 
-        let mut engine_counter = 1;
+        let mut all_engines = Vec::new();
 
-        for device_config in rpm_devices.iter() {
+        for (device_index, device_config) in rpm_devices.iter().enumerate() {
             let device_address = device_config.address;
 
-            info!("🔄 Processing RPM device: '{}' at address {}", 
-                  device_config.name, device_address);
+            info!("🔄 Processing RPM device {} at address {}: '{}'", 
+                  device_index + 1, device_address, device_config.name);
 
+            // Get channel configuration from device metadata
+            let (total_channels, _thresholds) = data_service.get_config().get_rpm_channel_config(device_address);
+            
             if let Some(device_data_str) = data_service.get_device_data_by_address(device_address).await {
                 match Self::extract_rpm_values(&device_data_str) {
                     Ok(channel_rpms) => {
                         for (channel_id, rpm_value) in channel_rpms {
-                            // Add engine RPM
-                            payload.add_field(
-                                format!("engineRPM{}", engine_counter),
-                                rpm_value.to_string()
-                            );
+                            // Determine engine type from metadata
+                            let engine_type = device_config.metadata
+                                .get("engine_types")
+                                .and_then(|types| types.split(',').nth((channel_id - 1) as usize))
+                                .unwrap_or("main")
+                                .to_string();
 
-                            // Add engine duration (placeholder for now)
-                            payload.add_field(
-                                format!("engineDurationME{}", engine_counter),
-                                "0".to_string() // TODO: Implement duration tracking
-                            );
+                            let engine_data = EngineData {
+                                rpm: rpm_value,
+                                duration: 0, // TODO: Get from database
+                                is_running: rpm_value > 500, // Configurable threshold
+                                engine_type: engine_type.clone(),
+                            };
 
-                            info!("✅ Added engine {} (device {}, channel {}): RPM={}", 
-                                  engine_counter, device_address, channel_id, rpm_value);
-
-                            engine_counter += 1;
+                            all_engines.push((device_address, channel_id, engine_data));
+                            
+                            info!("✅ Added engine from device {} channel {}: type={}, RPM={}", 
+                                  device_address, channel_id, engine_type, rpm_value);
                         }
                     }
                     Err(e) => {
                         warn!("⚠️ Failed to parse RPM data from device {}: {}", device_address, e);
-                        payload.add_field(format!("engineRPM{}", engine_counter), "0".to_string());
-                        payload.add_field(format!("engineDurationME{}", engine_counter), "0".to_string());
-                        engine_counter += 1;
+                        
+                        // Add default engines for failed device
+                        for channel_id in 1..=total_channels {
+                            let engine_data = EngineData {
+                                rpm: 0,
+                                duration: 0,
+                                is_running: false,
+                                engine_type: "main".to_string(),
+                            };
+                            all_engines.push((device_address, channel_id, engine_data));
+                        }
                     }
                 }
             } else {
                 warn!("⚠️ No data found for RPM device at address {}", device_address);
-                payload.add_field(format!("engineRPM{}", engine_counter), "0".to_string());
-                payload.add_field(format!("engineDurationME{}", engine_counter), "0".to_string());
-                engine_counter += 1;
+                
+                // Add default engines for offline device
+                for channel_id in 1..=total_channels {
+                    let engine_data = EngineData {
+                        rpm: 0,
+                        duration: 0,
+                        is_running: false,
+                        engine_type: "main".to_string(),
+                    };
+                    all_engines.push((device_address, channel_id, engine_data));
+                }
             }
         }
 
-        // 7. Add auxiliary engine durations (AE1, AE2, AE3)
-        payload.add_field("engineDurationAE1".to_string(), "0".to_string());
-        payload.add_field("engineDurationAE2".to_string(), "0".to_string());
-        payload.add_field("engineDurationAE3".to_string(), "0".to_string());
+        // Separate engines by type
+        let mut main_engines = Vec::new();
+        let mut aux_engines = Vec::new();
 
-        // 8. Add status fields
-        payload.add_field("statusAE1".to_string(), "false".to_string());
-        payload.add_field("statusAE2".to_string(), "false".to_string());
-        payload.add_field("statusAE3".to_string(), "false".to_string());
+        for (_address, _channel, engine_data) in &all_engines {
+            match engine_data.engine_type.as_str() {
+                "main" | "ME" => main_engines.push(engine_data),
+                "aux" | "AE" | "auxiliary" => aux_engines.push(engine_data),
+                _ => main_engines.push(engine_data), // Default to main
+            }
+        }
+
+        // Add Main Engine RPM values (dynamic count)
+        let main_engine_count = main_engines.len();
+        for (index, engine) in main_engines.iter().enumerate() {
+            let engine_number = index + 1;
+            payload.add_field(format!("engineRPM{}", engine_number), engine.rpm.to_string());
+        }
+
+        // Add Main Engine durations (dynamic count)
+        for (index, engine) in main_engines.iter().enumerate() {
+            let engine_number = index + 1;
+            payload.add_field(format!("engineDurationME{}", engine_number), engine.duration.to_string());
+        }
+
+        // Add Auxiliary Engine durations (dynamic count, minimum 3 for compatibility)
+        let max_aux_engines = std::cmp::max(3, aux_engines.len());
+        for aux_number in 1..=max_aux_engines {
+            if let Some(engine) = aux_engines.get(aux_number - 1) {
+                payload.add_field(format!("engineDurationAE{}", aux_number), engine.duration.to_string());
+                payload.add_field(format!("statusAE{}", aux_number), engine.is_running.to_string());
+            } else {
+                payload.add_field(format!("engineDurationAE{}", aux_number), "0".to_string());
+                payload.add_field(format!("statusAE{}", aux_number), "false".to_string());
+            }
+        }
+
+        info!("🔧 Added {} main engines and {} auxiliary engines", main_engine_count, aux_engines.len());
+
+        // 8. Add status fields (these can also be made dynamic based on config)
         payload.add_field("statusDoorOpenStarboard".to_string(), "false".to_string());
         payload.add_field("statusDoorOpenPort".to_string(), "false".to_string());
         payload.add_field("statusDCOK".to_string(), "true".to_string());
         payload.add_field("statusBattFail".to_string(), "false".to_string());
 
-        // 9. Add fuel level
-        payload.add_field("fuelLevelMM".to_string(), "0".to_string());
-
-        // 10. Add IMEI from config
-        payload.add_field("imei".to_string(), data_service.get_config().mtws.imei.clone());
-
-        info!("📦 Built MTWS payload with {} fields", payload.fields.len());
+        info!("📦 Built dynamic MTWS payload: {} flowmeters, {} total engines, {} fields", 
+              max_flowmeters, all_engines.len(), payload.fields.len());
+        
         Ok(payload)
     }
 
-    // JSON extraction methods for fallback data reading
+    // JSON extraction methods
     fn extract_flowmeter_values(data_str: &str) -> Result<FlowmeterValues, String> {
         let json_data: serde_json::Value = serde_json::from_str(data_str)
             .map_err(|e| format!("Failed to parse JSON: {}", e))?;
@@ -406,13 +471,6 @@ impl MtwsService {
         Ok(channel_rpms)
     }
 
-    fn add_default_flowmeter_values(payload: &mut MtwsPayload, flowmeter_number: usize) {
-        payload.add_field(format!("flowmeterVolumeTotal{}", flowmeter_number), "0".to_string());
-        payload.add_field(format!("flowmeterDensity{}", flowmeter_number), "0".to_string());
-        payload.add_field(format!("flowmeterTemperature{}", flowmeter_number), "0".to_string());
-        payload.add_field(format!("flowmeterFlowrate{}", flowmeter_number), "0".to_string());
-    }
-
     // Status and configuration methods
     pub async fn get_status(&self) -> (bool, u64, String, bool) {
         let is_running = *self.is_running.read().await;
@@ -443,14 +501,95 @@ impl MtwsService {
         Ok(())
     }
 
-    // Public method for getting current payload data
-    pub async fn get_current_payload(data_service: &DataService) -> Result<MtwsPayload, ModbusError> {
-        Self::build_payload(data_service).await
-    }
 
-    // API compatibility method
     pub async fn update_config(&self, _config: serde_json::Value) -> Result<(), ModbusError> {
         info!("🔧 MTWS configuration update requested");
         Ok(())
+    }
+
+    // Add this method to print payload for debugging
+    pub async fn print_current_payload(&self) -> Result<(), ModbusError> {
+        Self::print_current_payload_static(&self.data_service).await
+    }
+
+    // Static version for use with &DataService
+    pub async fn print_current_payload_static(data_service: &DataService) -> Result<(), ModbusError> {
+        let payload = Self::build_payload(data_service).await?;
+        
+        // Also print as JSON for easier viewing
+        println!("\n🔍 JSON REPRESENTATION:");
+        println!("=======================");
+        match serde_json::to_string_pretty(&payload) {
+            Ok(json_str) => println!("{}", json_str),
+            Err(e) => error!("Failed to serialize payload to JSON: {}", e),
+        }
+        
+        Ok(())
+    }
+
+    // Add this method to get payload as formatted string
+    pub async fn get_payload_summary(&self) -> Result<String, ModbusError> {
+        let payload = Self::build_payload(&self.data_service).await?;
+        
+        let mut summary = format!(
+            "MTWS Payload Summary:\n\
+             - SIN: {}\n\
+             - Name: {}\n\
+             - IsForward: {}\n\
+             - MIN: {}\n\
+             - Total Fields: {}\n\n\
+             Field Details:\n",
+            payload.sin, payload.name, payload.is_forward, payload.min, payload.fields.len()
+        );
+        
+        // Group fields by category for better readability
+        let mut gps_fields = Vec::new();
+        let mut flowmeter_fields = Vec::new();
+        let mut engine_fields = Vec::new();
+        let mut status_fields = Vec::new();
+        let mut other_fields = Vec::new();
+        
+        for field in &payload.fields {
+            if field.name.contains("longitude") || field.name.contains("latitude") || 
+               field.name.contains("speed") || field.name.contains("heading") || 
+               field.name.contains("altitude") || field.name.contains("gps") {
+                gps_fields.push(field);
+            } else if field.name.contains("flowmeter") {
+                flowmeter_fields.push(field);
+            } else if field.name.contains("engine") || field.name.contains("RPM") {
+                engine_fields.push(field);
+            } else if field.name.contains("status") {
+                status_fields.push(field);
+            } else {
+                other_fields.push(field);
+            }
+        }
+        
+        summary.push_str("\n📍 GPS Fields:\n");
+        for field in gps_fields {
+            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
+        }
+        
+        summary.push_str("\n🌊 Flowmeter Fields:\n");
+        for field in flowmeter_fields {
+            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
+        }
+        
+        summary.push_str("\n🔧 Engine/RPM Fields:\n");
+        for field in engine_fields {
+            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
+        }
+        
+        summary.push_str("\n⚡ Status Fields:\n");
+        for field in status_fields {
+            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
+        }
+        
+        summary.push_str("\n📦 Other Fields:\n");
+        for field in other_fields {
+            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
+        }
+        
+        Ok(summary)
     }
 }
