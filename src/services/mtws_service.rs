@@ -174,23 +174,42 @@ impl MtwsService {
         // 1. Add timestamp
         payload.add_field("timestamp".to_string(), Utc::now().timestamp().to_string());
 
-        // 2. Add GPS data from real GPS service
+        // 2. Add GPS data with DECIMAL formatting (not integer)
         if let Some(gps_data) = data_service.get_current_gps_data().await {
-            payload.add_field("longitude".to_string(), ((gps_data.longitude.unwrap_or(0.0) * 1_000_000.0) as i64).to_string());
-            payload.add_field("latitude".to_string(), ((gps_data.latitude.unwrap_or(0.0) * 1_000_000.0) as i64).to_string());
-            payload.add_field("speed".to_string(), (gps_data.speed.unwrap_or(0.0) as i32).to_string());
-            payload.add_field("heading".to_string(), (gps_data.course.unwrap_or(0.0) as i32).to_string());
-            payload.add_field("altitude".to_string(), (gps_data.altitude.unwrap_or(0.0) as i32).to_string());
+            // Format GPS coordinates as decimal strings with 6 decimal places
+            let longitude_str = if let Some(lon) = gps_data.longitude {
+                format!("{:.6}", lon)
+            } else {
+                "0.000000".to_string()
+            };
+            
+            let latitude_str = if let Some(lat) = gps_data.latitude {
+                format!("{:.6}", lat)
+            } else {
+                "0.000000".to_string()
+            };
+
+            payload.add_field("longitude".to_string(), longitude_str);
+            payload.add_field("latitude".to_string(), latitude_str);
+            payload.add_field("speed".to_string(), format!("{:.2}", gps_data.speed.unwrap_or(0.0)));
+            payload.add_field("heading".to_string(), format!("{:.1}", gps_data.course.unwrap_or(0.0)));
+            payload.add_field("altitude".to_string(), format!("{:.1}", gps_data.altitude.unwrap_or(0.0)));
             payload.add_field("gpsNumSats".to_string(), gps_data.satellites.unwrap_or(0).to_string());
-            info!("📍 Added real GPS data: lat={:?}, lon={:?}, speed={:?}", gps_data.latitude, gps_data.longitude, gps_data.speed);
+            
+            info!("📍 Added decimal GPS data: lat={:.6}, lon={:.6}, speed={:.2}, sats={}", 
+                  gps_data.latitude.unwrap_or(0.0), 
+                  gps_data.longitude.unwrap_or(0.0),
+                  gps_data.speed.unwrap_or(0.0), 
+                  gps_data.satellites.unwrap_or(0));
         } else {
-            payload.add_field("longitude".to_string(), "0".to_string());
-            payload.add_field("latitude".to_string(), "0".to_string());
-            payload.add_field("speed".to_string(), "0".to_string());
-            payload.add_field("heading".to_string(), "0".to_string());
-            payload.add_field("altitude".to_string(), "0".to_string());
+            // Default GPS values when no GPS available
+            payload.add_field("longitude".to_string(), "0.000000".to_string());
+            payload.add_field("latitude".to_string(), "0.000000".to_string());
+            payload.add_field("speed".to_string(), "0.00".to_string());
+            payload.add_field("heading".to_string(), "0.0".to_string());
+            payload.add_field("altitude".to_string(), "0.0".to_string());
             payload.add_field("gpsNumSats".to_string(), "0".to_string());
-            warn!("⚠️ No GPS data available, using default values");
+            warn!("⚠️ No GPS data available, using default decimal values");
         }
 
         // 3. Add power/battery data

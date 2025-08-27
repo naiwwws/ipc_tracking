@@ -34,7 +34,6 @@ pub struct DataService {
     mtws_service: Option<MtwsService>,
 }
 
-
 impl Clone for DataService {
     fn clone(&self) -> Self {
         // Create new devices vector by recreating them from config
@@ -107,7 +106,6 @@ impl DataService {
                         info!("📋 Configured multi-channel RPM device with {} channels at address {}", 
                               total_channels, device_config.address);
                     }
-
                     _ => {
                         warn!("⚠️ Unknown device type: {}", device_config.device_type);
                         continue;
@@ -148,7 +146,7 @@ impl DataService {
         let mut senders: Vec<Box<dyn DataSender>> = Vec::new();
         senders.push(Box::new(ConsoleSender));
 
-        // NEW: Initialize GPS service if enabled
+        // Initialize GPS service if enabled
         let gps_service = if config.gps.enabled {
             info!("🧭 Initializing GPS service on port {}", config.gps.port);
             let gps_service = GpsService::new(
@@ -221,12 +219,12 @@ impl DataService {
         Ok(())
     }
 
-    //  Helper method to get device config by address
+    // Helper method to get device config by address
     fn get_device_config_by_address(&self, address: u8) -> Option<&crate::config::DeviceConfig> {
         self.config.devices.iter().find(|d| d.address == address)
     }
 
-    //  Database storage method
+    // Database storage method
     async fn store_device_data_to_database(
         &self,
         device_address: u8,
@@ -257,7 +255,7 @@ impl DataService {
         self.device_address_to_uuid.get(&address)
     }
 
-    //  Main continuous monitoring method
+    // SINGLE run method with all enhancements
     pub async fn run(&mut self, debug_output: bool) -> Result<(), ModbusError> {
         info!("🚀 Starting service in endpoint-driven mode");
         info!("⚙️  Debug output: {}", if debug_output { "enabled" } else { "disabled" });
@@ -267,6 +265,14 @@ impl DataService {
             info!("💾 Database storage: ENABLED");
         } else {
             info!("📝 Database storage: DISABLED");
+        }
+
+        // Ensure GPS service is running if enabled
+        if self.gps_service.is_some() {
+            match self.ensure_gps_service_running().await {
+                Ok(_) => info!("🧭 GPS service verified and running"),
+                Err(e) => warn!("⚠️ GPS service issue: {}", e),
+            }
         }
 
         // Auto-start MTWS service if enabled and configured for auto-start
@@ -295,11 +301,26 @@ impl DataService {
         info!("✅ Service started successfully");
         info!("⏱️  Update interval: {} seconds", self.config.update_interval_seconds);
         
-        // Keep the service running
+        // Keep the service running with periodic GPS health checks
+        let mut gps_check_counter = 0;
+        
         loop {
             // Periodic device reading for MTWS and other services
             if let Err(e) = self.read_all_devices_once().await {
                 error!("❌ Failed to read devices: {}", e);
+            }
+            
+            // Check GPS health every 10 cycles (adjust as needed)
+            gps_check_counter += 1;
+            if gps_check_counter >= 10 {
+                gps_check_counter = 0;
+                
+                if self.gps_service.is_some() {
+                    match self.ensure_gps_service_running().await {
+                        Ok(_) => {} // GPS is fine
+                        Err(e) => warn!("⚠️ GPS health check failed: {}", e),
+                    }
+                }
             }
             
             // Wait for next cycle
@@ -307,8 +328,7 @@ impl DataService {
         }
     }
 
-
-    //  Fixed read_all_devices_once method
+    // Fixed read_all_devices_once method
     pub async fn read_all_devices_once(&mut self) -> Result<(), ModbusError> {
         info!("🔄 Starting sequential device reading cycle...");
         
@@ -327,7 +347,6 @@ impl DataService {
                     
                     match device.read_data(self.modbus_client.as_ref()).await {
                         Ok(device_data) => {
-                            // FIX: Use the correct method name
                             self.store_device_data(&device_config.uuid, device_data).await?;
                             info!("✅ Successfully read and stored flowmeter data from device {}", device_config.address);
                         }
@@ -420,7 +439,6 @@ impl DataService {
         }
     }
 
-
     // Get RPM devices configuration
     pub fn get_rpm_devices(&self) -> Vec<&DeviceConfig> {
         self.config.devices.iter()
@@ -435,7 +453,7 @@ impl DataService {
             .collect()
     }
 
-    // Fix the device data retrieval method
+    // Device data retrieval method
     pub async fn get_device_data_by_address(&self, device_address: u8) -> Option<String> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
             if let Some(device_data) = address_map.get(&device_address) {
@@ -450,7 +468,7 @@ impl DataService {
         None
     }
 
-    // Add method to get current flowmeter data directly
+    // Method to get current flowmeter data directly
     pub async fn get_current_flowmeter_data(&self, device_address: u8) -> Option<crate::devices::flowmeter::FlowmeterData> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
             if let Some(device_data) = address_map.get(&device_address) {
@@ -462,21 +480,19 @@ impl DataService {
         None
     }
 
-    // Add missing method for engine duration tracking
+    // Engine duration tracking
     pub async fn get_engine_durations(&self) -> HashMap<u8, i32> {
         // TODO: Implement database storage and retrieval for engine durations
-        // For now, return empty map
         HashMap::new()
     }
 
-    // Add method to reset engine duration
     pub async fn reset_engine_duration(&self, engine_address: u8) -> Result<(), ModbusError> {
         // TODO: Implement engine duration reset in database
         info!("🔄 Engine duration reset requested for address: {}", engine_address);
         Ok(())
     }
 
-    //  CLI interface methods
+    // CLI interface methods
     pub fn set_formatter(&mut self, formatter: Box<dyn DataFormatter>) {
         self.formatter = formatter;
         info!("🎨 Output formatter changed to: {}", self.formatter.formatter_type());
@@ -506,7 +522,7 @@ impl DataService {
         }
     }
 
-    // MINIMAL: Updated query method
+    // Query method
     pub async fn query_flowmeter_data(&self, device_address: u8, limit: i64) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let readings = db_service.get_device_flowmeter_readings(device_address, None, Some(limit)).await?;
@@ -532,7 +548,7 @@ impl DataService {
         Ok(())
     }
 
-    // MINIMAL: Updated stats method
+    // Stats method
     pub async fn get_flowmeter_stats(&self) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let stats = db_service.get_flowmeter_stats().await?;
@@ -560,7 +576,7 @@ impl DataService {
         Ok(())
     }
 
-    // Helper method to get device address from UUID (if still needed)
+    // Helper method to get device address from UUID
     fn get_address_from_uuid(&self, uuid: &str) -> Option<u8> {
         for (address, device_uuid) in &self.device_address_to_uuid {
             if device_uuid == uuid {
@@ -570,29 +586,105 @@ impl DataService {
         None
     }
 
-    // NEW: GPS control methods
+    // SINGLE get_current_gps_data method with enhanced error handling
     pub async fn get_current_gps_data(&self) -> Option<GpsData> {
         if let Some(gps_service) = &self.gps_service {
-            // Try to get fresh GPS fix
+            // First try to get fresh GPS fix
             match gps_service.get_current_gps_fix().await {
-                Ok(Some(data)) => Some(data),
+                Ok(Some(data)) => {
+                    info!("🧭 Fresh GPS fix: lat={:?}, lon={:?}, speed={:?}, sats={:?}", 
+                          data.latitude, data.longitude, data.speed, data.satellites);
+                    return Some(data);
+                }
                 Ok(None) => {
+                    info!("🧭 No fresh GPS fix available, trying last known data");
+                    
                     // Fallback to last known data
                     let last_data = gps_service.get_current_data().await;
                     if last_data.has_valid_fix() {
-                        Some(last_data)
+                        info!("🧭 Using last known GPS data: lat={:?}, lon={:?}", 
+                              last_data.latitude, last_data.longitude);
+                        return Some(last_data);
                     } else {
-                        None
+                        warn!("⚠️ Last known GPS data is invalid or too old");
                     }
                 }
-                Err(_) => None,
+                Err(e) => {
+                    warn!("⚠️ Failed to get GPS fix: {}", e);
+                }
             }
         } else {
-            None
+            warn!("⚠️ GPS service not initialized");
+        }
+        None
+    }
+
+    // Ensure GPS service is running without reinitializing
+    pub async fn ensure_gps_service_running(&self) -> Result<(), ModbusError> {
+        if let Some(gps_service) = &self.gps_service {
+            let status = gps_service.get_status().await;
+            
+            if !status.contains("Connected") && !status.contains("Reading") {
+                info!("🧭 GPS service not running, attempting to start...");
+                match gps_service.start().await {
+                    Ok(_) => {
+                        info!("✅ GPS service started successfully");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        warn!("⚠️ Failed to start GPS service: {}", e);
+                        return Err(ModbusError::CommunicationError(format!("GPS start failed: {}", e)));
+                    }
+                }
+            } else {
+                info!("🧭 GPS service already running: {}", status);
+            }
+            
+            Ok(())
+        } else {
+            Err(ModbusError::ServiceNotAvailable("GPS service not enabled".to_string()))
         }
     }
-    
-    // Remove the continuous GPS monitoring methods or make them no-op
+
+    // SINGLE get_gps_status method with enhanced status
+    pub async fn get_gps_status(&self) -> Result<String, ModbusError> {
+        if let Some(gps_service) = &self.gps_service {
+            let status = gps_service.get_status().await;
+            let current_data = gps_service.get_current_data().await;
+            
+            let detailed_status = format!(
+                "GPS Status: {} | Valid Fix: {} | Coordinates: ({:?}, {:?}) | Satellites: {:?}",
+                status,
+                current_data.has_valid_fix(),
+                current_data.latitude,
+                current_data.longitude,
+                current_data.satellites
+            );
+            
+            Ok(detailed_status)
+        } else {
+            Ok("GPS service not available".to_string())
+        }
+    }
+
+    // Method to manually refresh GPS data
+    pub async fn refresh_gps_data(&self) -> Result<Option<GpsData>, ModbusError> {
+        if let Some(gps_service) = &self.gps_service {
+            self.ensure_gps_service_running().await?;
+            
+            match gps_service.get_current_gps_fix().await {
+                Ok(data) => Ok(data),
+                Err(e) => {
+                    warn!("⚠️ Failed to refresh GPS data: {}", e);
+                    Ok(None)
+                }
+            }
+        } else {
+            Err(ModbusError::ServiceNotAvailable("GPS service not enabled".to_string()))
+        }
+    }
+
+    // GPS control methods
     pub async fn start_gps_service(&self) -> Result<(), ModbusError> {
         if let Some(gps_service) = &self.gps_service {
             gps_service.start().await?;
@@ -612,23 +704,13 @@ impl DataService {
             Err(ModbusError::ServiceNotAvailable("GPS service not enabled in config".to_string()))
         }
     }
-    
-    pub async fn get_gps_status(&self) -> Result<String, ModbusError> {
-        if let Some(gps_service) = &self.gps_service {
-            Ok(gps_service.get_status().await)
-        } else {
-            Ok("GPS not available".to_string())
-        }
-    }
 
-    // Add method to access API service if available
+    // API service access
     pub fn get_api_service(&self) -> Option<&crate::services::api_service::ApiService> {
-        // This would need to be implemented if you want direct access
-        // For now, we'll use HTTP requests to the API
         None
     }
 
-    // Add this missing method
+    // Store device data method
     pub async fn store_device_data(&mut self, device_uuid: &str, device_data: Box<dyn DeviceData>) -> Result<(), ModbusError> {
         let device_address = device_data.device_address();
         
@@ -650,12 +732,11 @@ impl DataService {
         Ok(())
     }
 
-    // Add this missing method
+    // Get RPM channel data
     pub async fn get_rpm_channel_data(&self, device_address: u8, channel_id: u8) -> Option<String> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
             if let Some(device_data) = address_map.get(&device_address) {
                 if let Some(rpm_data) = device_data.as_any().downcast_ref::<crate::devices::rpm::RpmData>() {
-                    // Find the specific channel
                     if let Some(channel) = rpm_data.channels.iter().find(|ch| ch.channel_id == channel_id) {
                         let channel_json = serde_json::json!({
                             "channel_id": channel.channel_id,
@@ -663,7 +744,6 @@ impl DataService {
                             "freq_value": channel.freq_value,
                             "pulse_config": channel.pulse_config,
                             "rpm_threshold": channel.rpm_threshold,
-                            // "engine_type": channel.engine_type,
                             "is_engine_running": channel.is_engine_running,
                             "status": channel.status,
                             "error_code": channel.error_code,
@@ -678,7 +758,7 @@ impl DataService {
         None
     }
 
-    // Add method to get MTWS service
+    // MTWS service access
     pub fn get_mtws_service(&self) -> Option<&MtwsService> {
         self.mtws_service.as_ref()
     }
@@ -687,35 +767,32 @@ impl DataService {
         self.mtws_service.as_mut()
     }
     
-    // Add these methods to DataService impl:
-
+    // Configuration methods
     pub fn get_config(&self) -> &Config {
         &self.config
     }
 
     pub fn update_config(&mut self, new_config: Config) {
-            self.config = new_config;
-            info!("📝 Configuration updated");
-            
-            // If there's any error handling needed, log warnings instead of returning errors
-            if let Some(mtws) = &self.mtws_service {
-                // Handle any MTWS updates here with logging instead of error returns
-                warn!("🔄 MTWS service restart required for configuration changes");
-            }
+        self.config = new_config;
+        info!("📝 Configuration updated");
+        
+        if let Some(mtws) = &self.mtws_service {
+            warn!("🔄 MTWS service restart required for configuration changes");
         }
+    }
         
     pub fn has_mtws_service(&self) -> bool {
         self.mtws_service.is_some()
     }
 
-    // Add method to get current device data for MTWS
+    // Get current device data for MTWS
     pub async fn get_current_device_data(&mut self) -> HashMap<String, String> {
         // Read fresh data from all devices
         if let Err(e) = self.read_all_devices_once().await {
             warn!("⚠️ Failed to read fresh device data: {}", e);
         }
         
-        // Return current data as JSON strings instead of trait objects
+        // Return current data as JSON strings
         let mut result = HashMap::new();
         if let Ok(data) = self.device_data.lock() {
             for (uuid, device_data) in data.iter() {
