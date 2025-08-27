@@ -365,8 +365,12 @@ fn build_cli() -> Command {
                             .value_name("URL"))
                         .arg(Arg::new("interval")
                             .long("interval")
-                            .help("Transmission interval in seconds (minimum 60)")
+                            .help("Transmission interval in seconds (minimum 1)")
                             .value_name("SECONDS"))
+                        .arg(Arg::new("auto-start")  // Add this missing argument
+                            .long("auto-start")
+                            .help("Enable/disable auto-start (true/false, yes/no, 1/0, on/off)")
+                            .value_name("BOOL"))
                 )
                 .subcommand(
                     Command::new("start")

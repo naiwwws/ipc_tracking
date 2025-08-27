@@ -489,7 +489,7 @@ pub async fn handle_rpm_command(data_service: &DataService, matches: &ArgMatches
 pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataService) -> Result<(), ModbusError> {
     match matches.subcommand() {
         Some(("config", sub_matches)) => {
-            let config_file = "setup/default.toml"; // Use the same config file as main
+            let config_file = "setup/default.toml";
             let mut config = service.get_config().clone();
             let mut config_updated = false;
 
@@ -537,7 +537,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
                 }
             }
 
-            // Add auto-start configuration
+            // Now this argument exists in CLI definition
             if let Some(auto_start_str) = sub_matches.get_one::<String>("auto-start") {
                 match auto_start_str.to_lowercase().as_str() {
                     "true" | "yes" | "1" | "on" => {
@@ -557,9 +557,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
                 }
             }
 
-            // Save configuration to file if any changes were made
             if config_updated {
-                // Save to TOML file
                 let toml_string = toml::to_string(&config)
                     .map_err(|e| ModbusError::InvalidData(format!("Failed to serialize config: {}", e)))?;
                 
@@ -567,21 +565,16 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
                     .map_err(|e| ModbusError::InvalidData(format!("Failed to write config file: {}", e)))?;
                 
                 println!("💾 Configuration saved to {}", config_file);
-                
-                // Update the service with new configuration
                 service.update_config(config);
                 println!("🔄 MTWS service updated with new configuration");
             }
         }
         Some(("test", _)) => {
-            // Fix borrowing issue by splitting operations
             let mtws_available = service.get_mtws_service().is_some();
             
             if mtws_available {
-                // First read devices
                 service.read_all_devices_once().await?;
                 
-                // Then test MTWS service
                 if let Some(mtws_service) = service.get_mtws_service() {
                     let endpoint = mtws_service.get_endpoint_url();
                     println!("🧪 Testing MTWS endpoint: {}", endpoint);
@@ -604,7 +597,6 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
                 }
             } else {
                 println!("❌ MTWS service not available");
-                println!("💡 Enable MTWS in configuration: mtws config --help");
             }
         }
         Some(("start", _)) => {
@@ -625,9 +617,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
         Some(("stop", _)) => {
             if let Some(mtws_service) = service.get_mtws_service() {
                 match mtws_service.stop_transmission().await {
-                    Ok(_) => {
-                        println!("✅ MTWS continuous transmission stopped");
-                    }
+                    Ok(_) => println!("✅ MTWS continuous transmission stopped"),
                     Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
                 }
             } else {
@@ -655,139 +645,44 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
                 println!("❌ MTWS service not available");
             }
         }
-        Some(("config", sub_matches)) => {
-            let config_file = "setup/default.toml"; // Use the same config file as main
-            let mut config = service.get_config().clone();
-            let mut config_updated = false;
-
-            if let Some(imei) = sub_matches.get_one::<String>("imei") {
-                // Validate IMEI
-                if imei.len() != 15 || !imei.chars().all(|c| c.is_ascii_digit()) {
-                    println!("❌ IMEI must be exactly 15 digits");
-                    return Ok(());
-                }
-
-                config.mtws.imei = imei.clone();
-                config_updated = true;
-                println!("✅ IMEI set to: {}", imei);
-                println!("🔗 Endpoint URL will be: {}", config.get_mtws_endpoint_url());
-            }
-            
-            if let Some(endpoint) = sub_matches.get_one::<String>("endpoint") {
-                if endpoint.is_empty() {
-                    println!("❌ Endpoint URL cannot be empty");
-                    return Ok(());
-                }
-
-                config.mtws.base_endpoint_url = endpoint.clone();
-                config_updated = true;
-                println!("✅ Base endpoint URL set to: {}", endpoint);
-                println!("🔗 Full endpoint will be: {}", config.get_mtws_endpoint_url());
-            }
-
-            if let Some(interval_str) = sub_matches.get_one::<String>("interval") {
-                match interval_str.parse::<u64>() {
-                    Ok(interval) => {
-                        if interval < 1 {
-                            println!("❌ Transmission interval must be at least 1 second");
-                            return Ok(());
-                        }
-
-                        config.mtws.transmission_interval_seconds = interval;
-                        config_updated = true;
-                        println!("✅ MTWS transmission interval set to {} seconds", interval);
-                    }
-                    Err(_) => {
-                        println!("❌ Invalid interval value: {}", interval_str);
-                        return Ok(());
-                    }
-                }
-            }
-
-            // Add auto-start configuration
-            if let Some(auto_start_str) = sub_matches.get_one::<String>("auto-start") {
-                match auto_start_str.to_lowercase().as_str() {
-                    "true" | "yes" | "1" | "on" => {
-                        config.mtws.auto_start = true;
-                        config_updated = true;
-                        println!("✅ MTWS auto-start enabled");
-                    }
-                    "false" | "no" | "0" | "off" => {
-                        config.mtws.auto_start = false;
-                        config_updated = true;
-                        println!("✅ MTWS auto-start disabled");
-                    }
-                    _ => {
-                        println!("❌ Invalid auto-start value. Use: true/false, yes/no, 1/0, on/off");
-                        return Ok(());
-                    }
-                }
-            }
-
-            // Save configuration to file if any changes were made
-            if config_updated {
-                // Save to TOML file
-                let toml_string = toml::to_string(&config)
-                    .map_err(|e| ModbusError::InvalidData(format!("Failed to serialize config: {}", e)))?;
-                
-                std::fs::write(config_file, toml_string)
-                    .map_err(|e| ModbusError::InvalidData(format!("Failed to write config file: {}", e)))?;
-                
-                println!("💾 Configuration saved to {}", config_file);
-                
-                // Update the service with new configuration
-                service.update_config(config);
-                println!("🔄 MTWS service updated with new configuration");
-            }
-        }
         Some(("enable", _)) => {
             let config_file = "setup/default.toml";
             let mut config = service.get_config().clone();
             config.mtws.enabled = true;
             
-            match config.save_to_file(config_file) {
-                Ok(_) => {
-                    println!("✅ MTWS service enabled in configuration");
-                    println!("💾 Configuration saved to {}", config_file);
-                    
-                    // Update the service config
-                    service.update_config(config);
-                    
-                    if service.has_mtws_service() {
-                        println!("🔄 MTWS service configuration updated");
-                    } else {
-                        println!("🔄 Please restart the application to start MTWS service");
-                    }
-                }
-                Err(e) => {
-                    println!("❌ Failed to save configuration: {}", e);
-                }
-            }
+            let toml_string = toml::to_string(&config)
+                .map_err(|e| ModbusError::InvalidData(format!("Failed to serialize config: {}", e)))?;
+            
+            std::fs::write(config_file, toml_string)
+                .map_err(|e| ModbusError::InvalidData(format!("Failed to write config file: {}", e)))?;
+            
+            println!("✅ MTWS service enabled in configuration");
+            println!("💾 Configuration saved to {}", config_file);
+            service.update_config(config);
+            println!("🔄 MTWS service configuration updated");
         }
         Some(("disable", _)) => {
             let config_file = "setup/default.toml";
             let mut config = service.get_config().clone();
             config.mtws.enabled = false;
             
-            match config.save_to_file(config_file) {
-                Ok(_) => {
-                    println!("✅ MTWS service disabled in configuration");
-                    println!("💾 Configuration saved to {}", config_file);
-                    
-                    // No Result to handle now
-                    service.update_config(config);
-                    println!("🔄 MTWS service configuration updated");
-                }
-                Err(e) => {
-                    println!("❌ Failed to save configuration: {}", e);
-                }
-            }
+            let toml_string = toml::to_string(&config)
+                .map_err(|e| ModbusError::InvalidData(format!("Failed to serialize config: {}", e)))?;
+            
+            std::fs::write(config_file, toml_string)
+                .map_err(|e| ModbusError::InvalidData(format!("Failed to write config file: {}", e)))?;
+            
+            println!("✅ MTWS service disabled in configuration");
+            println!("💾 Configuration saved to {}", config_file);
+            service.update_config(config);
+            println!("🔄 MTWS service configuration updated");
         }
         _ => {
             println!("Available MTWS commands:");
             println!("  config --imei <IMEI>           Set device IMEI (15 digits)");
             println!("  config --endpoint <URL>        Set base endpoint URL");
             println!("  config --interval <SECONDS>    Set transmission interval (minimum 1 second)");
+            println!("  config --auto-start <BOOL>     Enable/disable auto-start");
             println!("  start                          Start automatic transmission");
             println!("  stop                           Stop automatic transmission");
             println!("  send                           Send data immediately");
@@ -800,6 +695,7 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
             println!("  ./ipc_dev_rust mtws config --imei 123456789012345");
             println!("  ./ipc_dev_rust mtws config --endpoint \"http://mtws.masihplayground.my.id:80/SubmitForm\"");
             println!("  ./ipc_dev_rust mtws config --interval 1");
+            println!("  ./ipc_dev_rust mtws config --auto-start true");
             println!("  ./ipc_dev_rust mtws enable");
             println!("  ./ipc_dev_rust mtws test");
             println!("  ./ipc_dev_rust mtws start");
