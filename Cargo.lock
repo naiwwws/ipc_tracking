@@ -1286,7 +1286,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ipc_dev_rust"
+name = "ipc_tracking"
 version = "0.1.0"
 dependencies = [
  "actix-web",

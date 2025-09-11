@@ -84,16 +84,37 @@ pub async fn handle_subcommands(
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
             if let Some(addr) = device_address {
-                service.query_flowmeter_data(addr, limit).await?;
+                #[cfg(feature = "sqlite")]
+                {
+                    service.query_flowmeter_data(addr, limit).await?;
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    println!("❌ Flowmeter query command requires sqlite feature");
+                }
             } else {
-                println!("📋 Querying all devices (last {}):", limit);
+                #[cfg(feature = "sqlite")]
+                {
+                    println!("📋 Querying all devices (last {}):", limit);
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    println!("❌ Flowmeter query command requires sqlite feature");
+                }
             }
             return Ok(true);
         }
         
         if let Some(_) = matches.subcommand_matches("stats") {
             info!("📊 Executing database stats command...");
-            service.get_flowmeter_stats().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.get_flowmeter_stats().await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Database stats command requires sqlite feature");
+            }
             return Ok(true);
         }
         
@@ -103,7 +124,9 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            if let Some(db_service) = service.get_database_service() {
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(db_service) = service.get_database_service() {
                 let readings = db_service.get_recent_flowmeter_readings(limit).await?;
                 
                 println!("📋 Recent flowmeter readings (last {}):", limit);
@@ -121,8 +144,13 @@ pub async fn handle_subcommands(
                         reading.unix_timestamp
                     );
                 }
-            } else {
-                println!("❌ Database service not enabled");
+                } else {
+                    println!("❌ Database service not enabled");
+                }
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Database recent command requires sqlite feature");
             }
             return Ok(true);
         }
@@ -139,13 +167,27 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"10".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            service.query_flowmeter_data(device_address, limit).await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.query_flowmeter_data(device_address, limit).await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter query command requires sqlite feature");
+            }
             return Ok(true);
         }
         
         if let Some(_) = matches.subcommand_matches("stats") {
             info!("📊 Executing flowmeter stats command...");
-            service.get_flowmeter_stats().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.get_flowmeter_stats().await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter stats command requires sqlite feature");
+            }
             return Ok(true);
         }
         
@@ -155,26 +197,33 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            if let Some(db_service) = service.get_database_service() {
-                let readings = db_service.get_recent_flowmeter_readings(limit).await?;
-                
-                println!("📋 Recent flowmeter readings (last {}):", limit);
-                println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
-                    "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
-                println!("{}", "-".repeat(80));
-                
-                for reading in readings {
-                    println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
-                        reading.mass_flow_rate,
-                        reading.temperature,
-                        reading.density_flow,
-                        reading.volume_flow_rate,
-                        reading.error_code,
-                        reading.unix_timestamp
-                    );
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(db_service) = service.get_database_service() {
+                    let readings = db_service.get_recent_flowmeter_readings(limit).await?;
+                    
+                    println!("📋 Recent flowmeter readings (last {}):", limit);
+                    println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
+                        "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
+                    println!("{}", "-".repeat(80));
+                    
+                    for reading in readings {
+                        println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
+                            reading.mass_flow_rate,
+                            reading.temperature,
+                            reading.density_flow,
+                            reading.volume_flow_rate,
+                            reading.error_code,
+                            reading.unix_timestamp
+                        );
+                    }
+                } else {
+                    println!("❌ Database service not enabled");
                 }
-            } else {
-                println!("❌ Database service not enabled");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter recent command requires sqlite feature");
             }
             return Ok(true);
         }
@@ -692,13 +741,13 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
             println!("  disable                        Disable MTWS service");
             println!();
             println!("Examples:");
-            println!("  ./ipc_dev_rust mtws config --imei 123456789012345");
-            println!("  ./ipc_dev_rust mtws config --endpoint \"http://mtws.masihplayground.my.id:80/SubmitForm\"");
-            println!("  ./ipc_dev_rust mtws config --interval 1");
-            println!("  ./ipc_dev_rust mtws config --auto-start true");
-            println!("  ./ipc_dev_rust mtws enable");
-            println!("  ./ipc_dev_rust mtws test");
-            println!("  ./ipc_dev_rust mtws start");
+            println!("  ./ipc_tracking mtws config --imei 123456789012345");
+            println!("  ./ipc_tracking mtws config --endpoint \"http://mtws.masihplayground.my.id:80/SubmitForm\"");
+            println!("  ./ipc_tracking mtws config --interval 1");
+            println!("  ./ipc_tracking mtws config --auto-start true");
+            println!("  ./ipc_tracking mtws enable");
+            println!("  ./ipc_tracking mtws test");
+            println!("  ./ipc_tracking mtws start");
         }
     }
     Ok(())

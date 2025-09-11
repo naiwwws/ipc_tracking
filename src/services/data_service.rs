@@ -13,7 +13,9 @@ use crate::modbus::ModbusClient;
 use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice}; // Add RpmDevice
 use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
-use crate::services::{DatabaseService, MtwsService};
+#[cfg(feature = "sqlite")]
+use crate::services::DatabaseService;
+use crate::services::MtwsService;
 use crate::utils::error::ModbusError;
 use tokio::sync::Mutex as TokioMutex;
 use crate::devices::gps::{GpsService, GpsData};
@@ -27,6 +29,7 @@ pub struct DataService {
     modbus_client: Arc<ModbusClient>,
     formatter: Box<dyn DataFormatter>,
     senders: Vec<Box<dyn DataSender>>,
+    #[cfg(feature = "sqlite")]
     database_service: Option<DatabaseService>,
     polling_handle: Arc<TokioMutex<Option<tokio::task::JoinHandle<()>>>>,
     // NEW: GPS service
@@ -60,6 +63,7 @@ impl Clone for DataService {
             modbus_client: self.modbus_client.clone(),
             formatter: Box::new(ConsoleFormatter),
             senders: Vec::new(),
+            #[cfg(feature = "sqlite")]
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
             gps_service: self.gps_service.clone(),
@@ -124,6 +128,7 @@ impl DataService {
         }
 
         // Initialize and start database service
+        #[cfg(feature = "sqlite")]
         let database_service = if config.output.database_output.as_ref().map(|db| db.enabled).unwrap_or(false) {
             match DatabaseService::new(config.clone()).await {
                 Ok(db_service) => {
@@ -139,6 +144,9 @@ impl DataService {
             info!("📝 Database service disabled");
             None
         };
+        
+        #[cfg(not(feature = "sqlite"))]
+        let _database_service = ();
 
         // Create formatter
         let formatter: Box<dyn DataFormatter> = Box::new(ConsoleFormatter);
@@ -186,6 +194,7 @@ impl DataService {
             modbus_client,
             formatter,
             senders,
+            #[cfg(feature = "sqlite")]
             database_service,
             polling_handle: Arc::new(TokioMutex::new(None)),
             gps_service,
@@ -232,6 +241,7 @@ impl DataService {
     }
 
     // Database storage method
+    #[cfg(feature = "sqlite")]
     async fn store_device_data_to_database(
         &self,
         device_address: u8,
@@ -268,11 +278,14 @@ impl DataService {
         info!("⚙️  Debug output: {}", if debug_output { "enabled" } else { "disabled" });
         
         // Database status
+        #[cfg(feature = "sqlite")]
         if let Some(_) = &self.database_service {
             info!("💾 Database storage: ENABLED");
         } else {
             info!("📝 Database storage: DISABLED");
         }
+        #[cfg(not(feature = "sqlite"))]
+        info!("📝 Database storage: DISABLED (sqlite feature not enabled)");
 
         // Start GPS service with continuous reading if enabled
         if self.gps_service.is_some() {
@@ -557,14 +570,17 @@ impl DataService {
         self.senders.push(sender);
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_database_service(&self) -> Option<&DatabaseService> {
         self.database_service.as_ref()
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_database_service_mut(&mut self) -> Option<&mut DatabaseService> {
         self.database_service.as_mut()
     }
 
+    #[cfg(feature = "sqlite")]
     pub async fn check_database_health(&self) -> Result<Option<bool>, ModbusError> {
         if let Some(db_service) = &self.database_service {
             match db_service.get_flowmeter_stats().await {
@@ -577,6 +593,7 @@ impl DataService {
     }
 
     // Query method
+    #[cfg(feature = "sqlite")]
     pub async fn query_flowmeter_data(&self, device_address: u8, limit: i64) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let readings = db_service.get_device_flowmeter_readings(device_address, None, Some(limit)).await?;
@@ -603,6 +620,7 @@ impl DataService {
     }
 
     // Stats method
+    #[cfg(feature = "sqlite")]
     pub async fn get_flowmeter_stats(&self) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let stats = db_service.get_flowmeter_stats().await?;
@@ -777,6 +795,7 @@ impl DataService {
     }
 
     // API service access
+    #[cfg(feature = "api")]
     pub fn get_api_service(&self) -> Option<&crate::services::api_service::ApiService> {
         None
     }
@@ -798,6 +817,7 @@ impl DataService {
         }
 
         // Store to database
+        #[cfg(feature = "sqlite")]
         self.store_device_data_to_database(device_address, device_data.as_ref()).await?;
 
         Ok(())

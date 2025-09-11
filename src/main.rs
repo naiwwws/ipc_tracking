@@ -11,14 +11,17 @@ use anyhow::Result;
 use clap::{Arg, Command, ArgAction, ArgMatches}; // Add ArgMatches here
 use log::{info, warn};
 
-use services::{DataService, ApiService}; // Fixed import
+use services::DataService;
+#[cfg(feature = "api")]
+use services::ApiService;
+#[cfg(feature = "api")]
 use crate::services::api_service::ApiServiceState;
 use config::{Config, DynamicConfigManager};
-use ipc_dev_rust::{VERSION};
+use ipc_tracking::{VERSION};
 use cli::commands::{handle_subcommands};
 
 fn build_cli() -> Command {
-    Command::new("ipc_dev_rust")
+    Command::new("ipc_tracking")
         .version(VERSION)
         .about("Modular Industrial Device Communication Service")
         .arg(
@@ -637,7 +640,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ✅ FIXED: Start API service based on TOML config, not just CLI
+    #[cfg(feature = "api")]
     let mut api_service_handle: Option<crate::services::ApiService> = None;
+    #[cfg(feature = "api")]
     if config.api_server.enabled {
         if let Some(db_service) = service.get_database_service() {
             let sqlite_manager = db_service.get_sqlite_manager().clone();
@@ -668,6 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(gps_matches) = matches.subcommand_matches("gps") {
         if cli::commands::handle_gps_commands(gps_matches, &service).await? {
             // Stop services before returning
+            #[cfg(feature = "api")]
             if let Some(mut api_service) = api_service_handle {
                 api_service.stop().await?;
             }
@@ -678,6 +684,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle other subcommands
     if handle_subcommands(&matches, &mut service).await? {
         // Stop services before returning
+        #[cfg(feature = "api")]
         if let Some(mut api_service) = api_service_handle {
             api_service.stop().await?;
         }
@@ -759,6 +766,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🔄 Shutting down services...");
     
     // Stop API service first
+    #[cfg(feature = "api")]
     if let Some(mut api_service) = api_service_handle {
         info!("🛑 Stopping API service...");
         if let Err(e) = api_service.stop().await {
