@@ -611,10 +611,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_enabled = config.output.database_output.as_ref().map(|db| db.enabled).unwrap_or(false);
     info!("  Database: {}", if db_enabled { "enabled" } else { "disabled" });
 
+    info!("Mtws Config: {:?}", config.mtws);
+
     // Initialize DataService
     let mut service = DataService::new(config.clone()).await?;
-    
-    // Initialize MTWS service if enabled
+
+
+    info!("Mtws Config: {:?}", config.mtws);
+    #[cfg(feature = "sqlite")]
     if config.mtws.enabled {
         if let Err(e) = service.initialize_mtws_service() {
             warn!("⚠️ Failed to initialize MTWS service: {}", e);
@@ -637,6 +641,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    if config.mtws.enabled {
+        warn!("⚠️ MTWS is enabled in config but sqlite feature is not compiled. MTWS requires sqlite feature.");
     }
 
     // ✅ FIXED: Start API service based on TOML config, not just CLI

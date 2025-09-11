@@ -15,6 +15,7 @@ use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
 #[cfg(feature = "sqlite")]
 use crate::services::DatabaseService;
+#[cfg(feature = "sqlite")]
 use crate::services::MtwsService;
 use crate::utils::error::ModbusError;
 use tokio::sync::Mutex as TokioMutex;
@@ -35,6 +36,7 @@ pub struct DataService {
     // NEW: GPS service
     gps_service: Option<GpsService>,
     // NEW: MTWS service
+    #[cfg(feature = "sqlite")]
     mtws_service: Option<MtwsService>,
 }
 
@@ -67,6 +69,7 @@ impl Clone for DataService {
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
             gps_service: self.gps_service.clone(),
+            #[cfg(feature = "sqlite")]
             mtws_service: None, // Don't clone MTWS service to avoid circular references
         }
     }
@@ -198,10 +201,13 @@ impl DataService {
             database_service,
             polling_handle: Arc::new(TokioMutex::new(None)),
             gps_service,
+            #[cfg(feature = "sqlite")]
             mtws_service: None, // Initialize as None first
         };
 
         // Now initialize MTWS service if enabled
+        #[cfg(feature = "sqlite")]
+        info!("Mtws Config - Data Service: {:?}", config.mtws);
         if config.mtws.enabled {
             if let Err(e) = data_service.initialize_mtws_service() {
                 warn!("⚠️ Failed to initialize MTWS service: {}", e);
@@ -213,6 +219,7 @@ impl DataService {
         Ok(data_service)
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn initialize_mtws_service(&mut self) -> Result<(), ModbusError> {
         if !self.config.mtws.enabled {
             self.mtws_service = None;
@@ -305,6 +312,7 @@ impl DataService {
         }
 
         // Auto-start MTWS service if enabled and configured for auto-start
+        #[cfg(feature = "sqlite")]
         if let Some(mtws_service) = &self.mtws_service {
             if self.config.mtws.auto_start {
                 info!("🛰️ Auto-starting MTWS transmission service");
@@ -342,6 +350,7 @@ impl DataService {
                     info!("🛑 Received Ctrl+C signal, shutting down gracefully...");
                     
                     // Stop MTWS service if running
+                    #[cfg(feature = "sqlite")]
                     if let Some(mtws_service) = &self.mtws_service {
                         if let Err(e) = mtws_service.stop_transmission().await {
                             warn!("⚠️ Failed to stop MTWS service: {}", e);
@@ -850,13 +859,17 @@ impl DataService {
     }
 
     // MTWS service access
+    #[cfg(feature = "sqlite")]
     pub fn get_mtws_service(&self) -> Option<&MtwsService> {
         self.mtws_service.as_ref()
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_mtws_service_mut(&mut self) -> Option<&mut MtwsService> {
         self.mtws_service.as_mut()
     }
+    
+
     
     // Configuration methods
     pub fn get_config(&self) -> &Config {
@@ -867,13 +880,20 @@ impl DataService {
         self.config = new_config;
         info!("📝 Configuration updated");
         
+        #[cfg(feature = "sqlite")]
         if let Some(mtws) = &self.mtws_service {
             warn!("🔄 MTWS service restart required for configuration changes");
         }
     }
         
+    #[cfg(feature = "sqlite")]
     pub fn has_mtws_service(&self) -> bool {
         self.mtws_service.is_some()
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub fn has_mtws_service(&self) -> bool {
+        false
     }
 
     // Get current device data for MTWS

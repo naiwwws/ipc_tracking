@@ -619,79 +619,114 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
             }
         }
         Some(("test", _)) => {
-            let mtws_available = service.get_mtws_service().is_some();
-            
-            if mtws_available {
-                service.read_all_devices_once().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                let mtws_available = service.get_mtws_service().is_some();
                 
-                if let Some(mtws_service) = service.get_mtws_service() {
-                    let endpoint = mtws_service.get_endpoint_url();
-                    println!("🧪 Testing MTWS endpoint: {}", endpoint);
+                if mtws_available {
+                    service.read_all_devices_once().await?;
                     
-                    match mtws_service.send_data_once().await {
-                        Ok(_) => println!("✅ Test successful - endpoint is reachable and accepting data"),
-                        Err(e) => println!("❌ Test failed: {}", e),
+                    if let Some(mtws_service) = service.get_mtws_service() {
+                        let endpoint = mtws_service.get_endpoint_url();
+                        println!("🧪 Testing MTWS endpoint: {}", endpoint);
+                        
+                        match mtws_service.send_data_once().await {
+                            Ok(_) => println!("✅ Test successful - endpoint is reachable and accepting data"),
+                            Err(e) => println!("❌ Test failed: {}", e),
+                        }
                     }
+                } else {
+                    println!("❌ MTWS service not available");
+                    println!("💡 Check if MTWS is enabled in configuration");
                 }
-            } else {
-                println!("❌ MTWS service not available");
-                println!("💡 Check if MTWS is enabled in configuration");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("send", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.send_data_once().await {
-                    Ok(_) => println!("✅ MTWS data sent successfully"),
-                    Err(e) => println!("❌ Failed to send MTWS data: {}", e),
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.send_data_once().await {
+                        Ok(_) => println!("✅ MTWS data sent successfully"),
+                        Err(e) => println!("❌ Failed to send MTWS data: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("start", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.start_transmission().await {
-                    Ok(_) => {
-                        println!("✅ MTWS continuous transmission started");
-                        println!("📡 Endpoint: {}", mtws_service.get_endpoint_url());
-                        println!("⏱️ Interval: {} seconds", service.get_config().mtws.transmission_interval_seconds);
-                        println!("🔄 Service will send data automatically every {} seconds", service.get_config().mtws.transmission_interval_seconds);
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.start_transmission().await {
+                        Ok(_) => {
+                            println!("✅ MTWS continuous transmission started");
+                            println!("📡 Endpoint: {}", mtws_service.get_endpoint_url());
+                            println!("⏱️ Interval: {} seconds", service.get_config().mtws.transmission_interval_seconds);
+                            println!("🔄 Service will send data automatically every {} seconds", service.get_config().mtws.transmission_interval_seconds);
+                        }
+                        Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
                     }
-                    Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("stop", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.stop_transmission().await {
-                    Ok(_) => println!("✅ MTWS continuous transmission stopped"),
-                    Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.stop_transmission().await {
+                        Ok(_) => println!("✅ MTWS continuous transmission stopped"),
+                        Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("status", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                let (is_running, interval, endpoint, enabled) = mtws_service.get_status().await;
-                let imei = mtws_service.get_imei();
-                
-                println!("📊 MTWS Service Status:");
-                println!("  Enabled: {}", if enabled { "🟢 Yes" } else { "🔴 No" });
-                println!("  Running: {}", if is_running { "🟢 Yes (Continuous)" } else { "🔴 No" });
-                println!("  IMEI: {}", imei);
-                println!("  Endpoint: {}", endpoint);
-                println!("  Interval: {} seconds", interval);
-                println!("  Auto-start: {}", if service.get_config().mtws.auto_start { "🟢 Yes" } else { "🔴 No" });
-                println!("  Config File: setup/default.toml");
-                
-                if is_running {
-                    println!("  📡 Next transmission: in {} seconds", interval);
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    let (is_running, interval, endpoint, enabled) = mtws_service.get_status().await;
+                    let imei = mtws_service.get_imei();
+                    
+                    println!("📊 MTWS Service Status:");
+                    println!("  Enabled: {}", if enabled { "🟢 Yes" } else { "🔴 No" });
+                    println!("  Running: {}", if is_running { "🟢 Yes (Continuous)" } else { "🔴 No" });
+                    println!("  IMEI: {}", imei);
+                    println!("  Endpoint: {}", endpoint);
+                    println!("  Interval: {} seconds", interval);
+                    println!("  Auto-start: {}", if service.get_config().mtws.auto_start { "🟢 Yes" } else { "🔴 No" });
+                    println!("  Config File: setup/default.toml");
+                    
+                    if is_running {
+                        println!("  📡 Next transmission: in {} seconds", interval);
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("enable", _)) => {
