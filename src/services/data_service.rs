@@ -206,8 +206,8 @@ impl DataService {
 
         // Now initialize MTWS service if enabled
         #[cfg(feature = "sqlite")]
-        info!("Mtws Config - Data Service: {:?}", config.mtws);
         if config.mtws.enabled {
+            info!("Mtws Config - Data Service: {:?}", config.mtws);
             if let Err(e) = data_service.initialize_mtws_service() {
                 warn!("⚠️ Failed to initialize MTWS service: {}", e);
             } else {
