@@ -149,7 +149,6 @@ impl DataService {
         };
         
         #[cfg(not(feature = "sqlite"))]
-        let _database_service = ();
 
         // Create formatter
         let formatter: Box<dyn DataFormatter> = Box::new(ConsoleFormatter);
