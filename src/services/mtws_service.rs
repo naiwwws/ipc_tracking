@@ -10,6 +10,7 @@ use reqwest::Client;
 use crate::config::Config;
 use crate::services::DataService;
 use crate::utils::error::ModbusError;
+#[cfg(feature = "sqlite")]
 use crate::storage::models::{MtwsPayload};
 
 #[derive(Clone)]
@@ -90,9 +91,16 @@ impl MtwsService {
                 }
 
                 info!("🛰️ Periodic MTWS transmission starting...");
-                match Self::generate_and_send_payload(&data_service, &endpoint_url, &client).await {
-                    Ok(_) => info!("✅ Periodic MTWS transmission completed successfully"),
-                    Err(e) => error!("❌ Periodic MTWS transmission failed: {}", e),
+                #[cfg(feature = "sqlite")]
+                {
+                    match Self::generate_and_send_payload(&data_service, &endpoint_url, &client).await {
+                        Ok(_) => info!("✅ Periodic MTWS transmission completed successfully"),
+                        Err(e) => error!("❌ Periodic MTWS transmission failed: {}", e),
+                    }
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    error!("❌ MTWS transmission requires sqlite feature");
                 }
             }
             
@@ -114,10 +122,18 @@ impl MtwsService {
             return Err(ModbusError::ServiceNotAvailable("MTWS service is disabled".to_string()));
         }
 
-        let endpoint_url = self.config.get_mtws_endpoint_url();
-        info!("🛰️ Sending single MTWS payload to: {}", endpoint_url);
+        #[cfg(feature = "sqlite")]
+        {
+            let endpoint_url = self.config.get_mtws_endpoint_url();
+            info!("🛰️ Sending single MTWS payload to: {}", endpoint_url);
+            
+            Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
+        }
         
-        Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
+        #[cfg(not(feature = "sqlite"))]
+        {
+            return Err(ModbusError::ServiceNotAvailable("MTWS service requires sqlite feature".to_string()));
+        }
         
         Ok(())
     }
@@ -127,12 +143,21 @@ impl MtwsService {
             return Err(ModbusError::ServiceNotAvailable("MTWS service is disabled".to_string()));
         }
 
-        info!("🛰️ Sending single MTWS payload to custom endpoint: {}", endpoint_url);
-        let payload = Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
+        #[cfg(feature = "sqlite")]
+        {
+            info!("🛰️ Sending single MTWS payload to custom endpoint: {}", endpoint_url);
+            let payload = Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
+            
+            Ok(format!("Sent MTWS payload with {} fields to {}", payload.fields.len(), endpoint_url))
+        }
         
-        Ok(format!("Sent MTWS payload with {} fields to {}", payload.fields.len(), endpoint_url))
+        #[cfg(not(feature = "sqlite"))]
+        {
+            Err(ModbusError::ServiceNotAvailable("MTWS service requires sqlite feature".to_string()))
+        }
     }
 
+    #[cfg(feature = "sqlite")]
     async fn generate_and_send_payload(
         data_service: &DataService, 
         endpoint_url: &str,
@@ -168,6 +193,7 @@ impl MtwsService {
         Ok(payload)
     }
 
+    #[cfg(feature = "sqlite")]
     async fn build_payload(data_service: &DataService) -> Result<MtwsPayload, ModbusError> {
         let mut payload = MtwsPayload::new();
 
@@ -551,11 +577,13 @@ impl MtwsService {
     }
 
     // Add this method to print payload for debugging
+    #[cfg(feature = "sqlite")]
     pub async fn print_current_payload(&self) -> Result<(), ModbusError> {
         Self::print_current_payload_static(&self.data_service).await
     }
 
     // Static version for use with &DataService
+    #[cfg(feature = "sqlite")]
     pub async fn print_current_payload_static(data_service: &DataService) -> Result<(), ModbusError> {
         let payload = Self::build_payload(data_service).await?;
         
@@ -571,6 +599,7 @@ impl MtwsService {
     }
 
     // Add this method to get payload as formatted string
+    #[cfg(feature = "sqlite")]
     pub async fn get_payload_summary(&self) -> Result<String, ModbusError> {
         let payload = Self::build_payload(&self.data_service).await?;
         

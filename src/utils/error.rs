@@ -40,6 +40,7 @@ pub enum ModbusError {
     ServiceNotAvailable(String),
 }
 
+#[cfg(feature = "sqlite")]
 impl From<sqlx::Error> for ModbusError {
     fn from(err: sqlx::Error) -> Self {
         ModbusError::CommunicationError(format!("Database error: {}", err))

@@ -84,16 +84,37 @@ pub async fn handle_subcommands(
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
             if let Some(addr) = device_address {
-                service.query_flowmeter_data(addr, limit).await?;
+                #[cfg(feature = "sqlite")]
+                {
+                    service.query_flowmeter_data(addr, limit).await?;
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    println!("❌ Flowmeter query command requires sqlite feature");
+                }
             } else {
-                println!("📋 Querying all devices (last {}):", limit);
+                #[cfg(feature = "sqlite")]
+                {
+                    println!("📋 Querying all devices (last {}):", limit);
+                }
+                #[cfg(not(feature = "sqlite"))]
+                {
+                    println!("❌ Flowmeter query command requires sqlite feature");
+                }
             }
             return Ok(true);
         }
         
         if let Some(_) = matches.subcommand_matches("stats") {
             info!("📊 Executing database stats command...");
-            service.get_flowmeter_stats().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.get_flowmeter_stats().await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Database stats command requires sqlite feature");
+            }
             return Ok(true);
         }
         
@@ -103,7 +124,9 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            if let Some(db_service) = service.get_database_service() {
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(db_service) = service.get_database_service() {
                 let readings = db_service.get_recent_flowmeter_readings(limit).await?;
                 
                 println!("📋 Recent flowmeter readings (last {}):", limit);
@@ -121,8 +144,13 @@ pub async fn handle_subcommands(
                         reading.unix_timestamp
                     );
                 }
-            } else {
-                println!("❌ Database service not enabled");
+                } else {
+                    println!("❌ Database service not enabled");
+                }
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Database recent command requires sqlite feature");
             }
             return Ok(true);
         }
@@ -139,13 +167,27 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"10".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            service.query_flowmeter_data(device_address, limit).await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.query_flowmeter_data(device_address, limit).await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter query command requires sqlite feature");
+            }
             return Ok(true);
         }
         
         if let Some(_) = matches.subcommand_matches("stats") {
             info!("📊 Executing flowmeter stats command...");
-            service.get_flowmeter_stats().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                service.get_flowmeter_stats().await?;
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter stats command requires sqlite feature");
+            }
             return Ok(true);
         }
         
@@ -155,26 +197,33 @@ pub async fn handle_subcommands(
             let limit: i64 = sub_matches.get_one::<String>("limit").unwrap_or(&"20".to_string()).parse()
                 .map_err(|_| anyhow!("Invalid limit"))?;
                 
-            if let Some(db_service) = service.get_database_service() {
-                let readings = db_service.get_recent_flowmeter_readings(limit).await?;
-                
-                println!("📋 Recent flowmeter readings (last {}):", limit);
-                println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
-                    "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
-                println!("{}", "-".repeat(80));
-                
-                for reading in readings {
-                    println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
-                        reading.mass_flow_rate,
-                        reading.temperature,
-                        reading.density_flow,
-                        reading.volume_flow_rate,
-                        reading.error_code,
-                        reading.unix_timestamp
-                    );
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(db_service) = service.get_database_service() {
+                    let readings = db_service.get_recent_flowmeter_readings(limit).await?;
+                    
+                    println!("📋 Recent flowmeter readings (last {}):", limit);
+                    println!("{:<12} {:<12} {:<12} {:<12} {:<8} {:<15}", 
+                        "Mass Flow", "Temperature", "Density", "Vol Flow", "Error", "Unix Time");
+                    println!("{}", "-".repeat(80));
+                    
+                    for reading in readings {
+                        println!("{:<12.2} {:<12.2} {:<12.4} {:<12.3} {:<8} {:<15}", 
+                            reading.mass_flow_rate,
+                            reading.temperature,
+                            reading.density_flow,
+                            reading.volume_flow_rate,
+                            reading.error_code,
+                            reading.unix_timestamp
+                        );
+                    }
+                } else {
+                    println!("❌ Database service not enabled");
                 }
-            } else {
-                println!("❌ Database service not enabled");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ Flowmeter recent command requires sqlite feature");
             }
             return Ok(true);
         }
@@ -570,79 +619,114 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
             }
         }
         Some(("test", _)) => {
-            let mtws_available = service.get_mtws_service().is_some();
-            
-            if mtws_available {
-                service.read_all_devices_once().await?;
+            #[cfg(feature = "sqlite")]
+            {
+                let mtws_available = service.get_mtws_service().is_some();
                 
-                if let Some(mtws_service) = service.get_mtws_service() {
-                    let endpoint = mtws_service.get_endpoint_url();
-                    println!("🧪 Testing MTWS endpoint: {}", endpoint);
+                if mtws_available {
+                    service.read_all_devices_once().await?;
                     
-                    match mtws_service.send_data_once().await {
-                        Ok(_) => println!("✅ Test successful - endpoint is reachable and accepting data"),
-                        Err(e) => println!("❌ Test failed: {}", e),
+                    if let Some(mtws_service) = service.get_mtws_service() {
+                        let endpoint = mtws_service.get_endpoint_url();
+                        println!("🧪 Testing MTWS endpoint: {}", endpoint);
+                        
+                        match mtws_service.send_data_once().await {
+                            Ok(_) => println!("✅ Test successful - endpoint is reachable and accepting data"),
+                            Err(e) => println!("❌ Test failed: {}", e),
+                        }
                     }
+                } else {
+                    println!("❌ MTWS service not available");
+                    println!("💡 Check if MTWS is enabled in configuration");
                 }
-            } else {
-                println!("❌ MTWS service not available");
-                println!("💡 Check if MTWS is enabled in configuration");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("send", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.send_data_once().await {
-                    Ok(_) => println!("✅ MTWS data sent successfully"),
-                    Err(e) => println!("❌ Failed to send MTWS data: {}", e),
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.send_data_once().await {
+                        Ok(_) => println!("✅ MTWS data sent successfully"),
+                        Err(e) => println!("❌ Failed to send MTWS data: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("start", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.start_transmission().await {
-                    Ok(_) => {
-                        println!("✅ MTWS continuous transmission started");
-                        println!("📡 Endpoint: {}", mtws_service.get_endpoint_url());
-                        println!("⏱️ Interval: {} seconds", service.get_config().mtws.transmission_interval_seconds);
-                        println!("🔄 Service will send data automatically every {} seconds", service.get_config().mtws.transmission_interval_seconds);
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.start_transmission().await {
+                        Ok(_) => {
+                            println!("✅ MTWS continuous transmission started");
+                            println!("📡 Endpoint: {}", mtws_service.get_endpoint_url());
+                            println!("⏱️ Interval: {} seconds", service.get_config().mtws.transmission_interval_seconds);
+                            println!("🔄 Service will send data automatically every {} seconds", service.get_config().mtws.transmission_interval_seconds);
+                        }
+                        Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
                     }
-                    Err(e) => println!("❌ Failed to start MTWS transmission: {}", e),
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("stop", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                match mtws_service.stop_transmission().await {
-                    Ok(_) => println!("✅ MTWS continuous transmission stopped"),
-                    Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    match mtws_service.stop_transmission().await {
+                        Ok(_) => println!("✅ MTWS continuous transmission stopped"),
+                        Err(e) => println!("❌ Failed to stop MTWS transmission: {}", e),
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("status", _)) => {
-            if let Some(mtws_service) = service.get_mtws_service() {
-                let (is_running, interval, endpoint, enabled) = mtws_service.get_status().await;
-                let imei = mtws_service.get_imei();
-                
-                println!("📊 MTWS Service Status:");
-                println!("  Enabled: {}", if enabled { "🟢 Yes" } else { "🔴 No" });
-                println!("  Running: {}", if is_running { "🟢 Yes (Continuous)" } else { "🔴 No" });
-                println!("  IMEI: {}", imei);
-                println!("  Endpoint: {}", endpoint);
-                println!("  Interval: {} seconds", interval);
-                println!("  Auto-start: {}", if service.get_config().mtws.auto_start { "🟢 Yes" } else { "🔴 No" });
-                println!("  Config File: setup/default.toml");
-                
-                if is_running {
-                    println!("  📡 Next transmission: in {} seconds", interval);
+            #[cfg(feature = "sqlite")]
+            {
+                if let Some(mtws_service) = service.get_mtws_service() {
+                    let (is_running, interval, endpoint, enabled) = mtws_service.get_status().await;
+                    let imei = mtws_service.get_imei();
+                    
+                    println!("📊 MTWS Service Status:");
+                    println!("  Enabled: {}", if enabled { "🟢 Yes" } else { "🔴 No" });
+                    println!("  Running: {}", if is_running { "🟢 Yes (Continuous)" } else { "🔴 No" });
+                    println!("  IMEI: {}", imei);
+                    println!("  Endpoint: {}", endpoint);
+                    println!("  Interval: {} seconds", interval);
+                    println!("  Auto-start: {}", if service.get_config().mtws.auto_start { "🟢 Yes" } else { "🔴 No" });
+                    println!("  Config File: setup/default.toml");
+                    
+                    if is_running {
+                        println!("  📡 Next transmission: in {} seconds", interval);
+                    }
+                } else {
+                    println!("❌ MTWS service not available");
                 }
-            } else {
-                println!("❌ MTWS service not available");
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                println!("❌ MTWS transmission requires sqlite feature");
             }
         }
         Some(("enable", _)) => {
@@ -692,13 +776,13 @@ pub async fn handle_mtws_commands(matches: &ArgMatches, service: &mut DataServic
             println!("  disable                        Disable MTWS service");
             println!();
             println!("Examples:");
-            println!("  ./ipc_dev_rust mtws config --imei 123456789012345");
-            println!("  ./ipc_dev_rust mtws config --endpoint \"http://mtws.masihplayground.my.id:80/SubmitForm\"");
-            println!("  ./ipc_dev_rust mtws config --interval 1");
-            println!("  ./ipc_dev_rust mtws config --auto-start true");
-            println!("  ./ipc_dev_rust mtws enable");
-            println!("  ./ipc_dev_rust mtws test");
-            println!("  ./ipc_dev_rust mtws start");
+            println!("  ./ipc_tracking mtws config --imei 123456789012345");
+            println!("  ./ipc_tracking mtws config --endpoint \"http://mtws.masihplayground.my.id:80/SubmitForm\"");
+            println!("  ./ipc_tracking mtws config --interval 1");
+            println!("  ./ipc_tracking mtws config --auto-start true");
+            println!("  ./ipc_tracking mtws enable");
+            println!("  ./ipc_tracking mtws test");
+            println!("  ./ipc_tracking mtws start");
         }
     }
     Ok(())

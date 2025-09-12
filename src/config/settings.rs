@@ -237,7 +237,7 @@ impl Default for MtwsConfig {
             timeout_seconds: 30,
             retry_attempts: 3,
             retry_delay_seconds: 60,
-            auto_start: false,
+            auto_start: true,
         }
     }
 }

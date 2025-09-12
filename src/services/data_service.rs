@@ -13,7 +13,10 @@ use crate::modbus::ModbusClient;
 use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice}; // Add RpmDevice
 use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
-use crate::services::{DatabaseService, MtwsService};
+#[cfg(feature = "sqlite")]
+use crate::services::DatabaseService;
+#[cfg(feature = "sqlite")]
+use crate::services::MtwsService;
 use crate::utils::error::ModbusError;
 use tokio::sync::Mutex as TokioMutex;
 use crate::devices::gps::{GpsService, GpsData};
@@ -27,11 +30,13 @@ pub struct DataService {
     modbus_client: Arc<ModbusClient>,
     formatter: Box<dyn DataFormatter>,
     senders: Vec<Box<dyn DataSender>>,
+    #[cfg(feature = "sqlite")]
     database_service: Option<DatabaseService>,
     polling_handle: Arc<TokioMutex<Option<tokio::task::JoinHandle<()>>>>,
     // NEW: GPS service
     gps_service: Option<GpsService>,
     // NEW: MTWS service
+    #[cfg(feature = "sqlite")]
     mtws_service: Option<MtwsService>,
 }
 
@@ -60,9 +65,11 @@ impl Clone for DataService {
             modbus_client: self.modbus_client.clone(),
             formatter: Box::new(ConsoleFormatter),
             senders: Vec::new(),
+            #[cfg(feature = "sqlite")]
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
             gps_service: self.gps_service.clone(),
+            #[cfg(feature = "sqlite")]
             mtws_service: None, // Don't clone MTWS service to avoid circular references
         }
     }
@@ -124,6 +131,7 @@ impl DataService {
         }
 
         // Initialize and start database service
+        #[cfg(feature = "sqlite")]
         let database_service = if config.output.database_output.as_ref().map(|db| db.enabled).unwrap_or(false) {
             match DatabaseService::new(config.clone()).await {
                 Ok(db_service) => {
@@ -139,6 +147,8 @@ impl DataService {
             info!("📝 Database service disabled");
             None
         };
+        
+        #[cfg(not(feature = "sqlite"))]
 
         // Create formatter
         let formatter: Box<dyn DataFormatter> = Box::new(ConsoleFormatter);
@@ -186,14 +196,18 @@ impl DataService {
             modbus_client,
             formatter,
             senders,
+            #[cfg(feature = "sqlite")]
             database_service,
             polling_handle: Arc::new(TokioMutex::new(None)),
             gps_service,
+            #[cfg(feature = "sqlite")]
             mtws_service: None, // Initialize as None first
         };
 
         // Now initialize MTWS service if enabled
+        #[cfg(feature = "sqlite")]
         if config.mtws.enabled {
+            info!("Mtws Config - Data Service: {:?}", config.mtws);
             if let Err(e) = data_service.initialize_mtws_service() {
                 warn!("⚠️ Failed to initialize MTWS service: {}", e);
             } else {
@@ -204,6 +218,7 @@ impl DataService {
         Ok(data_service)
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn initialize_mtws_service(&mut self) -> Result<(), ModbusError> {
         if !self.config.mtws.enabled {
             self.mtws_service = None;
@@ -232,6 +247,7 @@ impl DataService {
     }
 
     // Database storage method
+    #[cfg(feature = "sqlite")]
     async fn store_device_data_to_database(
         &self,
         device_address: u8,
@@ -268,11 +284,14 @@ impl DataService {
         info!("⚙️  Debug output: {}", if debug_output { "enabled" } else { "disabled" });
         
         // Database status
+        #[cfg(feature = "sqlite")]
         if let Some(_) = &self.database_service {
             info!("💾 Database storage: ENABLED");
         } else {
             info!("📝 Database storage: DISABLED");
         }
+        #[cfg(not(feature = "sqlite"))]
+        info!("📝 Database storage: DISABLED (sqlite feature not enabled)");
 
         // Start GPS service with continuous reading if enabled
         if self.gps_service.is_some() {
@@ -292,6 +311,7 @@ impl DataService {
         }
 
         // Auto-start MTWS service if enabled and configured for auto-start
+        #[cfg(feature = "sqlite")]
         if let Some(mtws_service) = &self.mtws_service {
             if self.config.mtws.auto_start {
                 info!("🛰️ Auto-starting MTWS transmission service");
@@ -329,6 +349,7 @@ impl DataService {
                     info!("🛑 Received Ctrl+C signal, shutting down gracefully...");
                     
                     // Stop MTWS service if running
+                    #[cfg(feature = "sqlite")]
                     if let Some(mtws_service) = &self.mtws_service {
                         if let Err(e) = mtws_service.stop_transmission().await {
                             warn!("⚠️ Failed to stop MTWS service: {}", e);
@@ -557,14 +578,17 @@ impl DataService {
         self.senders.push(sender);
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_database_service(&self) -> Option<&DatabaseService> {
         self.database_service.as_ref()
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_database_service_mut(&mut self) -> Option<&mut DatabaseService> {
         self.database_service.as_mut()
     }
 
+    #[cfg(feature = "sqlite")]
     pub async fn check_database_health(&self) -> Result<Option<bool>, ModbusError> {
         if let Some(db_service) = &self.database_service {
             match db_service.get_flowmeter_stats().await {
@@ -577,6 +601,7 @@ impl DataService {
     }
 
     // Query method
+    #[cfg(feature = "sqlite")]
     pub async fn query_flowmeter_data(&self, device_address: u8, limit: i64) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let readings = db_service.get_device_flowmeter_readings(device_address, None, Some(limit)).await?;
@@ -603,6 +628,7 @@ impl DataService {
     }
 
     // Stats method
+    #[cfg(feature = "sqlite")]
     pub async fn get_flowmeter_stats(&self) -> Result<(), ModbusError> {
         if let Some(db_service) = &self.database_service {
             let stats = db_service.get_flowmeter_stats().await?;
@@ -777,6 +803,7 @@ impl DataService {
     }
 
     // API service access
+    #[cfg(feature = "api")]
     pub fn get_api_service(&self) -> Option<&crate::services::api_service::ApiService> {
         None
     }
@@ -798,6 +825,7 @@ impl DataService {
         }
 
         // Store to database
+        #[cfg(feature = "sqlite")]
         self.store_device_data_to_database(device_address, device_data.as_ref()).await?;
 
         Ok(())
@@ -830,13 +858,17 @@ impl DataService {
     }
 
     // MTWS service access
+    #[cfg(feature = "sqlite")]
     pub fn get_mtws_service(&self) -> Option<&MtwsService> {
         self.mtws_service.as_ref()
     }
 
+    #[cfg(feature = "sqlite")]
     pub fn get_mtws_service_mut(&mut self) -> Option<&mut MtwsService> {
         self.mtws_service.as_mut()
     }
+    
+
     
     // Configuration methods
     pub fn get_config(&self) -> &Config {
@@ -847,13 +879,20 @@ impl DataService {
         self.config = new_config;
         info!("📝 Configuration updated");
         
+        #[cfg(feature = "sqlite")]
         if let Some(mtws) = &self.mtws_service {
             warn!("🔄 MTWS service restart required for configuration changes");
         }
     }
         
+    #[cfg(feature = "sqlite")]
     pub fn has_mtws_service(&self) -> bool {
         self.mtws_service.is_some()
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub fn has_mtws_service(&self) -> bool {
+        false
     }
 
     // Get current device data for MTWS
