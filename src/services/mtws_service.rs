@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::services::DataService;
 use crate::utils::error::ModbusError;
 #[cfg(feature = "sqlite")]
-use crate::storage::models::{MtwsPayload, MtwsField};
+use crate::storage::models::{MtwsPayload};
 
 #[derive(Clone)]
 pub struct MtwsService {
@@ -326,7 +326,7 @@ impl MtwsService {
 
         // Add flowmeter data dynamically based on actual device count
         // Ensure minimum of 4 for legacy compatibility, but support unlimited
-        let max_flowmeters = std::cmp::max(4, flowmeter_count);
+        let max_flowmeters = std::cmp::max(1, flowmeter_count);
         
         // Add all VolumeTotal fields
         for flowmeter_number in 1..=max_flowmeters {
