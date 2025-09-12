@@ -8,7 +8,7 @@ mod output;
 mod storage;
 
 use anyhow::Result;
-use clap::{Arg, Command, ArgAction, ArgMatches}; // Add ArgMatches here
+use clap::{Arg, Command, ArgAction}; // Add ArgMatches here
 use log::{info, warn};
 
 use services::{DataService, ApiService}; // Fixed import
