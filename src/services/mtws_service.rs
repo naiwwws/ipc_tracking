@@ -496,14 +496,67 @@ impl MtwsService {
 
         info!("🔧 Added {} main engines and {} auxiliary engines", main_engine_count, aux_engines.len());
 
-        // 8. Add status fields (these can also be made dynamic based on config)
+        // 8. DYNAMIC AIO MODULE DATA - Read all AIO devices from config
+        let aio_devices = data_service.get_aio_module_devices();
+        let aio_device_count = aio_devices.len();
+        info!("🔍 Found {} configured AIO module devices", aio_device_count);
+
+        for (device_index, device_config) in aio_devices.iter().enumerate() {
+            let device_address = device_config.address;
+
+            info!("📊 Processing AIO module {} at address {}: '{}'", 
+                  device_index + 1, device_address, device_config.name);
+
+            if let Some(aio_data) = data_service.get_current_aio_module_data(device_address).await {
+                // Add analog channel data (4 channels per device)
+                for channel_data in &aio_data.channels {
+                    // payload.add_field(format!("aio{}Ch{}Pulse", device_address, channel_data.channel_id), channel_data.pulse_count.to_string());
+                    // payload.add_field(format!("aio{}Ch{}Threshold", device_address, channel_data.channel_id), channel_data.threshold.to_string());
+                    // payload.add_field(format!("aio{}Ch{}Frequency", device_address, channel_data.channel_id), channel_data.frequency.to_string());
+                    payload.add_field(format!("aio{}Ch{}RPM", device_address, channel_data.channel_id), channel_data.rpm_value.to_string());
+                    payload.add_field(format!("aio{}Ch{}Average", device_address, channel_data.channel_id), channel_data.average_value.to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationRPM", device_address, channel_data.channel_id), channel_data.duration_rpm.to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationAE", device_address, channel_data.channel_id), channel_data.duration_ae.to_string());
+                }
+
+                // Add digital input state (convert Vec<bool> to u16 bitmask)
+                let mut digital_bitmask: u16 = 0;
+                for (i, &is_active) in aio_data.digital_inputs.iter().enumerate() {
+                    if is_active && i < 16 {
+                        digital_bitmask |= 1 << i;
+                    }
+                }
+                payload.add_field(format!("aio{}DigitalInputs", device_address), digital_bitmask.to_string());
+
+                info!("✅ Added AIO module {} data: {} channels, digital inputs=0x{:04X}", 
+                      device_address, aio_data.channels.len(), digital_bitmask);
+            } else {
+                warn!("⚠️ No data found for AIO module at address {}", device_address);
+                
+                // Add default values for offline AIO device (4 channels)
+                for channel_id in 1..=4 {
+                    payload.add_field(format!("aio{}Ch{}Pulse", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}Threshold", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}Frequency", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}RPM", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}Average", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationRPM", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationAE", device_address, channel_id), "0".to_string());
+                }
+                payload.add_field(format!("aio{}DigitalInputs", device_address), "0".to_string());
+            }
+        }
+
+        info!("📊 Added {} AIO module devices with comprehensive channel data", aio_device_count);
+
+        // 9. Add status fields (these can also be made dynamic based on config)
         payload.add_field("statusDoorOpenStarboard".to_string(), "false".to_string());
         payload.add_field("statusDoorOpenPort".to_string(), "false".to_string());
         payload.add_field("statusDCOK".to_string(), "true".to_string());
         payload.add_field("statusBattFail".to_string(), "false".to_string());
 
-        info!("📦 Built dynamic MTWS payload: {} flowmeters, {} total engines, {} fields", 
-              max_flowmeters, all_engines.len(), payload.fields.len());
+        info!("📦 Built dynamic MTWS payload: {} flowmeters, {} total engines, {} AIO modules, {} fields", 
+              max_flowmeters, all_engines.len(), aio_device_count, payload.fields.len());
         
         Ok(payload)
     }

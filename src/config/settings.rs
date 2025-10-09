@@ -425,6 +425,16 @@ fn get_default_parameters_for_type(device_type: &str) -> Vec<String> {
             "Speed".to_string(),
             "Course".to_string(),
         ],
+        "aio" => vec![
+            "BaudRate".to_string(),
+            "ChannelCount".to_string(),
+            "AIN1".to_string(), "AIN2".to_string(), "AIN3".to_string(), "AIN4".to_string(),
+            "AIN5".to_string(), "AIN6".to_string(), "AIN7".to_string(), "AIN8".to_string(),
+            "DIN1".to_string(), "DIN2".to_string(), "DIN3".to_string(), "DIN4".to_string(),
+            "DIN5".to_string(), "DIN6".to_string(), "DIN7".to_string(), "DIN8".to_string(),
+            "DIN9".to_string(), "DIN10".to_string(), "DIN11".to_string(), "DIN12".to_string(),
+            "DIN13".to_string(), "DIN14".to_string(), "DIN15".to_string(), "DIN16".to_string(),
+        ],
         _ => vec!["Status".to_string()],
     }
 }
@@ -627,6 +637,23 @@ impl Config {
                 metadata.insert("precision".to_string(), "high".to_string());
                 metadata.insert("altitude_enabled".to_string(), "true".to_string());
             }
+            "aio" => {
+                metadata.insert("total_analog_channels".to_string(), "8".to_string());
+                metadata.insert("digital_inputs_count".to_string(), "16".to_string());
+                metadata.insert("channel_types".to_string(), "rpm,rpm,pulse,frequency,rpm,pulse,frequency,pulse".to_string());
+                metadata.insert("rpm_thresholds".to_string(), "500,500,0,0,500,0,0,0".to_string());
+                metadata.insert("auto_detect_channels".to_string(), "true".to_string());
+                metadata.insert("baud_rate".to_string(), "9600".to_string());
+                
+                // Set individual channel configurations
+                let channel_types = ["rpm", "rpm", "pulse", "frequency", "rpm", "pulse", "frequency", "pulse"];
+                let thresholds = [500, 500, 0, 0, 500, 0, 0, 0];
+                
+                for (i, (&channel_type, &threshold)) in channel_types.iter().zip(thresholds.iter()).enumerate() {
+                    metadata.insert(format!("channel_{}_type", i + 1), channel_type.to_string());
+                    metadata.insert(format!("channel_{}_threshold", i + 1), threshold.to_string());
+                }
+            }
             _ => {}
         }
 
@@ -696,6 +723,71 @@ impl Config {
                 .unwrap_or(true);
         }
         true
+    }
+
+    // AIO Module Configuration Methods
+    
+    // Get AIO channel configuration
+    pub fn get_aio_channel_config(&self, address: u8) -> (u8, u8, Vec<String>) {
+        if let Some(device) = self.get_device_by_address(address) {
+            if device.device_type == "aio" {
+                let analog_channels = device.metadata.get("total_analog_channels")
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(8);
+                
+                let digital_inputs = device.metadata.get("digital_inputs_count")
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(16);
+                
+                let channel_types = device.metadata.get("channel_types")
+                    .map(|s| s.split(',').map(String::from).collect())
+                    .unwrap_or_else(|| vec!["rpm".to_string(); analog_channels as usize]);
+                
+                return (analog_channels, digital_inputs, channel_types);
+            }
+        }
+        (8, 16, vec!["rpm".to_string(); 8]) // Default configuration
+    }
+
+    // Get AIO channel thresholds for RPM channels
+    pub fn get_aio_channel_thresholds(&self, address: u8) -> Vec<u16> {
+        if let Some(device) = self.get_device_by_address(address) {
+            if device.device_type == "aio" {
+                let (analog_channels, _, channel_types) = self.get_aio_channel_config(address);
+                let mut thresholds = Vec::new();
+                
+                for i in 0..analog_channels {
+                    let threshold_key = format!("channel_{}_threshold", i + 1);
+                    let threshold = device.metadata.get(&threshold_key)
+                        .and_then(|s| s.parse::<u16>().ok())
+                        .unwrap_or(if channel_types.get(i as usize).unwrap_or(&"pulse".to_string()) == "rpm" { 500 } else { 0 });
+                    thresholds.push(threshold);
+                }
+                
+                return thresholds;
+            }
+        }
+        vec![500, 500, 0, 0, 500, 0, 0, 0] // Default thresholds
+    }
+
+    // Check if AIO auto-detection is enabled
+    pub fn is_aio_auto_detect_enabled(&self, address: u8) -> bool {
+        if let Some(device) = self.get_device_by_address(address) {
+            return device.metadata.get("auto_detect_channels")
+                .and_then(|s| s.parse::<bool>().ok())
+                .unwrap_or(true);
+        }
+        true
+    }
+
+    // Get AIO baud rate
+    pub fn get_aio_baud_rate(&self, address: u8) -> u16 {
+        if let Some(device) = self.get_device_by_address(address) {
+            return device.metadata.get("baud_rate")
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(9600);
+        }
+        9600
     }
 
     // Add method to get enabled flowmeter devices

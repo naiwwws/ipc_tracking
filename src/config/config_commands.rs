@@ -854,6 +854,98 @@ async fn handle_enhanced_add_command(
         }
     }
 
+    // Handle AIO-specific parameters
+    if device_type == "aio" {
+        // Analog channels (required)
+        if let Some(analog_channels_str) = matches.get_one::<String>("analog-channels") {
+            let analog_channels = analog_channels_str.parse::<u8>()
+                .map_err(|_| "Invalid analog channels count")?;
+
+            if analog_channels == 0 || analog_channels > 8 {
+                return Err("Analog channels must be between 1 and 8".into());
+            }
+
+            parameters.insert("total_analog_channels".to_string(), analog_channels.to_string());
+
+            // Digital inputs (optional, default 16)
+            let digital_inputs = matches.get_one::<String>("digital-inputs")
+                .unwrap_or(&"16".to_string())
+                .parse::<u8>()
+                .map_err(|_| "Invalid digital inputs count")?;
+
+            if digital_inputs > 16 {
+                return Err("Digital inputs cannot exceed 16".into());
+            }
+
+            parameters.insert("digital_inputs_count".to_string(), digital_inputs.to_string());
+
+            // Parse channel types if provided
+            let mut channel_types = Vec::new();
+            if let Some(type_strs) = matches.get_many::<String>("channel-types") {
+                channel_types = type_strs.cloned().collect();
+                
+                // Validate channel types
+                for channel_type in &channel_types {
+                    if !["rpm", "pulse", "frequency"].contains(&channel_type.as_str()) {
+                        return Err(format!("Invalid channel type '{}'. Must be one of: rpm, pulse, frequency", channel_type).into());
+                    }
+                }
+            }
+
+            // Pad or truncate channel types to match analog channels count
+            while channel_types.len() < analog_channels as usize {
+                // Default pattern: first few channels are RPM, rest are pulse
+                let channel_type = if channel_types.len() < 4 { "rpm" } else { "pulse" };
+                channel_types.push(channel_type.to_string());
+            }
+            channel_types.truncate(analog_channels as usize);
+
+            parameters.insert("channel_types".to_string(), channel_types.join(","));
+
+            // Set individual channel types
+            for (i, channel_type) in channel_types.iter().enumerate() {
+                parameters.insert(format!("channel_{}_type", i + 1), channel_type.clone());
+            }
+
+            // Parse AIO thresholds for RPM channels
+            let mut thresholds = Vec::new();
+            if let Some(threshold_strs) = matches.get_many::<String>("aio-thresholds") {
+                let parsed_thresholds: Result<Vec<u16>, _> = threshold_strs
+                    .map(|s| s.parse::<u16>())
+                    .collect();
+                
+                match parsed_thresholds {
+                    Ok(parsed) => thresholds = parsed,
+                    Err(_) => return Err("Invalid threshold format for AIO channels".into()),
+                }
+            }
+
+            // Set thresholds for each channel
+            let mut threshold_values = Vec::new();
+            for (i, channel_type) in channel_types.iter().enumerate() {
+                let threshold = if channel_type == "rpm" {
+                    thresholds.get(i).copied().unwrap_or(500)
+                } else {
+                    0 // Non-RPM channels don't need thresholds
+                };
+                threshold_values.push(threshold.to_string());
+                parameters.insert(format!("channel_{}_threshold", i + 1), threshold.to_string());
+            }
+
+            parameters.insert("rpm_thresholds".to_string(), threshold_values.join(","));
+
+            // Auto-detection flag
+            let auto_detect = matches.get_flag("auto-detect-aio");
+            parameters.insert("auto_detect_channels".to_string(), auto_detect.to_string());
+
+            // Default baud rate for AIO modules
+            parameters.insert("baud_rate".to_string(), "9600".to_string());
+
+        } else {
+            return Err("AIO devices require --analog-channels parameter".into());
+        }
+    }
+
     let command = ConfigurationCommand {
         command_id: Uuid::new_v4().to_string(),
         timestamp: Utc::now(),

@@ -114,7 +114,7 @@ impl DataService {
                         info!("Configured multi-channel RPM device with {} channels at address {}", 
                               total_channels, device_config.address);
                     }
-                    "aio_module" => {
+                    "aio" => {
                         let aio_device = AioModuleDevice::new(
                             device_config.address,
                             device_config.name.clone(),
@@ -471,6 +471,30 @@ impl DataService {
                     // Add delay between devices for RS485
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
+                "aio" | "AIO" => {
+                    info!("🔧 Reading AIO device {} at address {}", device_config.name, device_config.address);
+                    
+                    let aio_device = AioModuleDevice::new(
+                        device_config.address,
+                        device_config.name.clone(),
+                        device_config.location.clone(),
+                        10, // Default update interval: 10 seconds
+                        1000, // Default timeout: 1000 ms
+                    );
+
+                    match aio_device.read_data(self.modbus_client.as_ref()).await {
+                        Ok(device_data) => {
+                            self.store_device_data(&device_config.uuid, device_data).await?;
+                            info!("✅ Successfully read and stored AIO data from device {}", device_config.address);
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to read AIO device {}: {}", device_config.address, e);
+                        }
+                    }
+
+                    // Add delay between devices for RS485
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
                 "gps" => {
                     info!("🧭 Reading GPS device {} at address {}", device_config.name, device_config.address);
                     // GPS reading logic would go here
@@ -545,7 +569,7 @@ impl DataService {
     // Get AIO module devices configuration
     pub fn get_aio_module_devices(&self) -> Vec<&DeviceConfig> {
         self.config.devices.iter()
-            .filter(|d| d.enabled && d.device_type == "aio_module")
+            .filter(|d| d.enabled && d.device_type.to_lowercase() == "aio")
             .collect()
     }
 

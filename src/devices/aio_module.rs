@@ -86,57 +86,68 @@ impl AioModuleDevice {
     }
 
     fn parse_modbus_response(&self, raw_data: &[u8]) -> Result<AioModuleData, ModbusError> {
+        // Expected 78 bytes for 39 registers (39 * 2 = 78 bytes)
         if raw_data.len() < 78 {
             return Err(ModbusError::InvalidData(format!(
-                "AIO module response too short: expected at least 78 bytes, got {}",
+                "AIO module response too short: expected 78 bytes, got {}",
                 raw_data.len()
             )));
         }
 
-        // Parse baud rate from first 2 bytes
-        let baud_rate = ((raw_data[0] as u16) << 8) | (raw_data[1] as u16);
+        info!("📊 Parsing AIO data: {} bytes received", raw_data.len());
 
-        // Parse 4 channels of data
+        // Parse data exactly as the Lua code does:
+        // Data starts from register 1, so raw_data[0-1] = BAUD_RATE (register 1)
+        
+        // BAUD_RATE: arg[1] << 8 | arg[2] -> raw_data[0] << 8 | raw_data[1]
+        let baud_rate = ((raw_data[0] as u16) << 8) | (raw_data[1] as u16);
+        
+        // Parse 4 channels exactly as Lua does
         let mut channels = Vec::new();
-        for ch in 0..4 {
-            let base_offset = ch * 2;
+        for y in 0..4 {
+            // PULSE_CH: arg[3 + 2*y] << 8 | arg[4 + 2*y]
+            // For y=0: arg[3] << 8 | arg[4] -> raw_data[2] << 8 | raw_data[3]
+            let pulse_idx = 2 + 2 * y;
+            let pulse_count = ((raw_data[pulse_idx] as u16) << 8) | (raw_data[pulse_idx + 1] as u16);
             
-            // Pulse count (bytes 2-9)
-            let pulse_count = ((raw_data[2 + base_offset] as u16) << 8) 
-                            | (raw_data[3 + base_offset] as u16);
+            // THRESHOLD_CH: arg[11 + 2*y] << 8 | arg[12 + 2*y]
+            // For y=0: arg[11] << 8 | arg[12] -> raw_data[10] << 8 | raw_data[11]
+            let threshold_idx = 10 + 2 * y;
+            let threshold = ((raw_data[threshold_idx] as u16) << 8) | (raw_data[threshold_idx + 1] as u16);
             
-            // Threshold (bytes 10-17)
-            let threshold = ((raw_data[10 + base_offset] as u16) << 8) 
-                          | (raw_data[11 + base_offset] as u16);
+            // FREQ_CH: arg[19 + 2*y] << 8 | arg[20 + 2*y]
+            // For y=0: arg[19] << 8 | arg[20] -> raw_data[18] << 8 | raw_data[19]
+            let freq_idx = 18 + 2 * y;
+            let frequency = ((raw_data[freq_idx] as u16) << 8) | (raw_data[freq_idx + 1] as u16);
             
-            // Frequency (bytes 18-25)
-            let frequency = ((raw_data[18 + base_offset] as u16) << 8) 
-                          | (raw_data[19 + base_offset] as u16);
+            // RPM_CH: arg[27 + 2*y] << 8 | arg[28 + 2*y]
+            // For y=0: arg[27] << 8 | arg[28] -> raw_data[26] << 8 | raw_data[27]
+            let rpm_idx = 26 + 2 * y;
+            let rpm_value = ((raw_data[rpm_idx] as u16) << 8) | (raw_data[rpm_idx + 1] as u16);
             
-            // RPM value (bytes 26-33)
-            let rpm_value = ((raw_data[26 + base_offset] as u16) << 8) 
-                          | (raw_data[27 + base_offset] as u16);
+            // AVG_CH: arg[35 + 2*y] << 8 | arg[36 + 2*y]
+            // For y=0: arg[35] << 8 | arg[36] -> raw_data[34] << 8 | raw_data[35]
+            let avg_idx = 34 + 2 * y;
+            let average_value = ((raw_data[avg_idx] as u16) << 8) | (raw_data[avg_idx + 1] as u16);
             
-            // Average value (bytes 34-41)
-            let average_value = ((raw_data[34 + base_offset] as u16) << 8) 
-                              | (raw_data[35 + base_offset] as u16);
+            // DUR_RPM_CH: arg[47 + 4*y] << 24 | arg[48 + 4*y] << 16 | arg[49 + 4*y] << 8 | arg[50 + 4*y]
+            // For y=0: arg[47-50] -> raw_data[46-49]
+            let dur_rpm_idx = 46 + 4 * y;
+            let duration_rpm = ((raw_data[dur_rpm_idx] as u32) << 24)
+                             | ((raw_data[dur_rpm_idx + 1] as u32) << 16)
+                             | ((raw_data[dur_rpm_idx + 2] as u32) << 8)
+                             | (raw_data[dur_rpm_idx + 3] as u32);
             
-            // Duration RPM (bytes 46-61, 4 bytes per channel)
-            let dur_base = 46 + ch * 4;
-            let duration_rpm = ((raw_data[dur_base] as u32) << 24)
-                             | ((raw_data[dur_base + 1] as u32) << 16)
-                             | ((raw_data[dur_base + 2] as u32) << 8)
-                             | (raw_data[dur_base + 3] as u32);
-            
-            // Duration AE (bytes 62-77, 4 bytes per channel)
-            let ae_base = 62 + ch * 4;
-            let duration_ae = ((raw_data[ae_base] as u32) << 24)
-                            | ((raw_data[ae_base + 1] as u32) << 16)
-                            | ((raw_data[ae_base + 2] as u32) << 8)
-                            | (raw_data[ae_base + 3] as u32);
+            // DUR_AE: arg[63 + 4*y] << 24 | arg[64 + 4*y] << 16 | arg[65 + 4*y] << 8 | arg[66 + 4*y]
+            // For y=0: arg[63-66] -> raw_data[62-65]
+            let dur_ae_idx = 62 + 4 * y;
+            let duration_ae = ((raw_data[dur_ae_idx] as u32) << 24)
+                            | ((raw_data[dur_ae_idx + 1] as u32) << 16)
+                            | ((raw_data[dur_ae_idx + 2] as u32) << 8)
+                            | (raw_data[dur_ae_idx + 3] as u32);
 
             channels.push(AioChannelData {
-                channel_id: (ch + 1) as u8,
+                channel_id: (y + 1) as u8,
                 pulse_count,
                 threshold,
                 frequency,
@@ -145,14 +156,22 @@ impl AioModuleDevice {
                 duration_rpm,
                 duration_ae,
             });
+
+            info!("📊 Channel {}: pulse={}, threshold={}, freq={}, rpm={}, avg={}, dur_rpm={}, dur_ae={}", 
+                  y + 1, pulse_count, threshold, frequency, rpm_value, average_value, duration_rpm, duration_ae);
         }
 
-        // Parse digital inputs from bytes 42-43 (16 bits)
+        // DIN_STATE: dinTmp = arg[43] << 8 | arg[44] -> raw_data[42] << 8 | raw_data[43]
         let din_word = ((raw_data[42] as u16) << 8) | (raw_data[43] as u16);
+        
+        // Parse digital inputs exactly as Lua: (dinTmp >> j) & 0x1
         let mut digital_inputs = Vec::new();
-        for i in 0..16 {
-            digital_inputs.push((din_word >> i) & 0x1 == 1);
+        for j in 0..16 {
+            digital_inputs.push((din_word >> j) & 0x1 == 1);
         }
+
+        info!("📊 AIO Parsed: baud_rate={}, din_word=0b{:016b}, {} channels", 
+              baud_rate, din_word, channels.len());
 
         Ok(AioModuleData {
             device_address: self.address,
@@ -169,7 +188,7 @@ impl AioModuleDevice {
 #[async_trait]
 impl Device for AioModuleDevice {
     fn device_type(&self) -> &str {
-        "aio_module"
+        "aio"
     }
 
     fn address(&self) -> u8 {
@@ -185,17 +204,40 @@ impl Device for AioModuleDevice {
     }
 
     async fn read_data(&self, client: &dyn ModbusClientTrait) -> Result<Box<dyn DeviceData>, ModbusError> {
-        info!("Reading AIO module data from device {} at address {}", self.name, self.address);
+        info!("🔧 Reading AIO module data from device '{}' at address {}", self.name, self.address);
 
-        // Read holding registers 1-39 (39 registers = 78 bytes)
-        // This matches the Lua implementation: start_register_addr = 1, quantity = 39
+        // First try a simple connectivity test
+        // info!("🧪 Testing AIO connectivity with single register read...");
+        // match client.read_holding_registers(self.address, 0x0000, 1).await {
+        //     Ok(test_data) => {
+        //         info!("✅ AIO connectivity test PASSED: {} bytes", test_data.len());
+        //     }
+        //     Err(e) => {
+        //         warn!("❌ AIO connectivity test FAILED: {}", e);
+        //         return Err(ModbusError::CommunicationError(format!(
+        //             "AIO module at address {} not responding to basic connectivity test: {}", 
+        //             self.address, e
+        //         )));
+        //     }
+        // }
+
+        // Match Lua implementation exactly: read registers 1-39 (39 registers)
+        // This corresponds to the working Lua code: start_register_addr = 1, quantity = 39
+        info!("📡 Reading full AIO data: registers 1-39 (39 registers) from device {}", self.address);
         let raw_data = client
-            .read_holding_registers(self.address, 1, 39)
+            .read_holding_registers(self.address, 0x0001, 39)
             .await
             .map_err(|e| {
                 error!("Failed to read AIO module data from address {}: {}", self.address, e);
                 e
             })?;
+
+        info!("✅ Successfully read {} bytes from AIO module at address {}", raw_data.len(), self.address);
+        
+        // Debug: Show first 20 bytes to compare with expected values
+        if raw_data.len() >= 20 {
+            info!("🔍 AIO Raw data (first 20 bytes): {:02X?}", &raw_data[0..20]);
+        }
 
         let aio_data = self.parse_modbus_response(&raw_data)?;
         
@@ -353,7 +395,7 @@ impl DeviceData for AioModuleData {
     }
 
     fn device_type(&self) -> String {
-        "aio_module".to_string()
+        "aio".to_string()
     }
 
     fn device_name(&self) -> String {
