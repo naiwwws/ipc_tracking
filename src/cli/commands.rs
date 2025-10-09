@@ -19,11 +19,11 @@ pub async fn handle_subcommands(
         match format.as_str() {
             "json" => {
                 info!("🎨 Using JSON formatter");
-                service.set_formatter(Box::new(JsonFormatter));
+                // service.set_formatter(Box::new(JsonFormatter));
             }
             "csv" => {
                 info!("🎨 Using CSV formatter");
-                service.set_formatter(Box::new(CsvFormatter));
+                // service.set_formatter(Box::new(CsvFormatter));
             }
             _ => {} // Keep default console formatter
         }
@@ -32,7 +32,7 @@ pub async fn handle_subcommands(
     // Configure output destinations
     if let Some(output_file) = matches.get_one::<String>("output-file") {
         info!("📝 Adding file output: {}", output_file);
-        service.add_sender(Box::new(FileSender::new(output_file, true)));
+        // service.add_sender(Box::new(FileSender::new(output_file, true)));
     }
 
     // Handle GPS commands

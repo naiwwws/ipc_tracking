@@ -279,7 +279,7 @@ impl Default for Config {
         default_devices.push(DeviceConfig {
             uuid: Uuid::new_v4().to_string(),
             address: 2,
-            device_type: "Flowmeter".to_string(),
+            device_type: "flowmeter".to_string(),
             name: "Inlet Flowmeter".to_string(),
             location: "Building A - Line 1".to_string(),
             enabled: true,
@@ -304,7 +304,7 @@ impl Default for Config {
         default_devices.push(DeviceConfig {
             uuid: Uuid::new_v4().to_string(),
             address: 3,
-            device_type: "Flowmeter".to_string(),
+            device_type: "flowmeter".to_string(),
             name: "Outlet Flowmeter".to_string(),
             location: "Building A - Line 2".to_string(),
             enabled: true,
@@ -730,6 +730,10 @@ impl Config {
     // Add method to get full MTWS endpoint with IMEI
     pub fn get_mtws_endpoint_url(&self) -> String {
         format!("{}/{}", self.mtws.base_endpoint_url, self.mtws.imei)
+    }
+
+    pub fn get_device_imei(&self) -> &str {
+        &self.mtws.imei
     }
 
     // Add method to validate MTWS configuration
