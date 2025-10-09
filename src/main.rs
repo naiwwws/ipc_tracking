@@ -727,15 +727,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match format.as_str() {
             "json" => {
                 info!("🎨 Using JSON formatter");
-                service.set_formatter(Box::new(crate::output::JsonFormatter));
+                // service.set_formatter(Box::new(crate::output::JsonFormatter));
             }
             "csv" => {
                 info!("🎨 Using CSV formatter");
-                service.set_formatter(Box::new(crate::output::CsvFormatter));
+                // service.set_formatter(Box::new(crate::output::CsvFormatter));
             }
             "hex" => {
                 info!("🔍 Using Hex formatter");
-                service.set_formatter(Box::new(crate::output::HexFormatter));
+                // service.set_formatter(Box::new(crate::output::HexFormatter));
             }
             _ => {} // Keep default console formatter
         }
@@ -743,7 +743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(output_file) = matches.get_one::<String>("output-file") {
         info!("📝 Adding file output: {}", output_file);
-        service.add_sender(Box::new(crate::output::FileSender::new(output_file, true)));
+        // service.add_sender(Box::new(crate::output::FileSender::new(output_file, true)));
     }
 
     // Start continuous service

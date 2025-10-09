@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::settings::SqliteConfig;
-use crate::storage::models::{FlowmeterReading, FlowmeterStats, RpmReading, CombinedDeviceReading};
+use crate::storage::models::{FlowmeterReading, FlowmeterStats, RpmReading, CombinedDeviceReading, AioModuleReading};
 use crate::utils::error::ModbusError;
 
 #[derive(Clone)]
@@ -118,7 +118,6 @@ impl SqliteManager {
         sqlx::query(r#"
             CREATE TABLE IF NOT EXISTS combined_device_readings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                vessel_id TEXT NOT NULL,
                 reading_timestamp INTEGER NOT NULL,
                 
                 -- GPS Data
@@ -132,7 +131,6 @@ impl SqliteManager {
                 -- Multi-device data as JSON/TEXT
                 flowmeter_data TEXT, -- JSON as TEXT
                 rpm_data TEXT,       -- JSON as TEXT
-                engine_durations TEXT, -- JSON as TEXT
                 
                 -- Environmental
                 wind_speed REAL,
@@ -141,9 +139,6 @@ impl SqliteManager {
                 -- Power
                 battery_voltage REAL,
                 external_power_voltage REAL,
-                
-                -- Status
-                status_flags TEXT, -- JSON as TEXT
                 
                 created_at INTEGER DEFAULT (strftime('%s', 'now'))
             )
@@ -203,6 +198,21 @@ impl SqliteManager {
                 error_count INTEGER DEFAULT 0,
                 total_readings INTEGER DEFAULT 0,
                 updated_at INTEGER NOT NULL
+            )
+        "#)
+        .execute(&self.pool)
+        .await?;
+
+        // AIO Module readings table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS aio_module_readings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_address INTEGER NOT NULL,
+                unix_timestamp INTEGER NOT NULL,
+                baud_rate INTEGER NOT NULL,
+                channels_data TEXT NOT NULL,
+                digital_inputs INTEGER NOT NULL,
+                created_at INTEGER
             )
         "#)
         .execute(&self.pool)
@@ -470,12 +480,11 @@ impl SqliteManager {
     pub async fn insert_combined_reading(&self, reading: &CombinedDeviceReading) -> Result<(), ModbusError> {
         sqlx::query(r#"
             INSERT INTO combined_device_readings (
-                vessel_id, reading_timestamp, latitude, longitude, speed, course, altitude, satellites,
-                flowmeter_data, rpm_data, engine_durations, wind_speed, wind_direction,
-                battery_voltage, external_power_voltage, status_flags
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reading_timestamp, latitude, longitude, speed, course, altitude, satellites,
+                flowmeter_data, rpm_data, wind_speed, wind_direction,
+                battery_voltage, external_power_voltage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#)
-        .bind(&reading.vessel_id)
         .bind(reading.reading_timestamp)
         .bind(reading.latitude)
         .bind(reading.longitude)
@@ -485,16 +494,14 @@ impl SqliteManager {
         .bind(reading.satellites)
         .bind(&reading.flowmeter_data)
         .bind(&reading.rpm_data)
-        .bind(&reading.engine_durations)
         .bind(reading.wind_speed)
         .bind(reading.wind_direction)
         .bind(reading.battery_voltage)
         .bind(reading.external_power_voltage)
-        .bind(&reading.status_flags)
         .execute(&self.pool)
         .await?;
 
-        info!("💾 Inserted combined device reading for vessel {}", reading.vessel_id);
+        info!("💾 Inserted combined device reading for vessel {}", reading.reading_timestamp);
         Ok(())
     }
 
@@ -554,8 +561,68 @@ impl SqliteManager {
     }
 
 
+    // AIO Module reading methods
+    pub async fn store_aio_module_reading(&self, reading: &AioModuleReading) -> Result<(), ModbusError> {
+        sqlx::query(r#"
+            INSERT INTO aio_module_readings (
+                device_address, unix_timestamp, baud_rate, 
+                channels_data, digital_inputs, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        "#)
+        .bind(reading.device_address)
+        .bind(reading.unix_timestamp)
+        .bind(reading.baud_rate)
+        .bind(&reading.channels_data)
+        .bind(reading.digital_inputs)
+        .bind(reading.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ModbusError::CommunicationError(format!("Failed to store AIO module reading: {}", e)))?;
+        
+        Ok(())
+    }
+
+    pub async fn get_recent_aio_module_readings(&self, limit: i64) -> Result<Vec<AioModuleReading>, ModbusError> {
+        let readings = sqlx::query_as::<_, AioModuleReading>(r#"
+            SELECT id, device_address, unix_timestamp, baud_rate, 
+                   channels_data, digital_inputs, created_at
+            FROM aio_module_readings 
+            ORDER BY unix_timestamp DESC 
+            LIMIT ?
+        "#)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ModbusError::CommunicationError(format!("Failed to get recent AIO module readings: {}", e)))?;
+        
+        Ok(readings)
+    }
+
+    pub async fn get_aio_module_readings_by_address_and_timerange(
+        &self,
+        device_address: u8,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<AioModuleReading>, ModbusError> {
+        let readings = sqlx::query_as::<_, AioModuleReading>(r#"
+            SELECT id, device_address, unix_timestamp, baud_rate, 
+                   channels_data, digital_inputs, created_at
+            FROM aio_module_readings 
+            WHERE device_address = ? AND unix_timestamp BETWEEN ? AND ?
+            ORDER BY unix_timestamp ASC
+        "#)
+        .bind(device_address)
+        .bind(start_time)
+        .bind(end_time)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ModbusError::CommunicationError(format!("Failed to get AIO module readings by address and time range: {}", e)))?;
+        
+        Ok(readings)
+    }
+
     pub async fn close(&self) {
-        info!("🔒 Closing SQLite database connections");
+        info!("Closing SQLite database connections");
         self.pool.close().await;
     }
 }

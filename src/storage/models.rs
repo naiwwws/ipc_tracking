@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::devices::{traits::DeviceData, RpmChannelData};
+use crate::devices::{traits::DeviceData, RpmChannelData, AioChannelData};
 
 // MINIMAL: Essential flowmeter reading structure
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -127,11 +127,7 @@ impl FlowmeterReading {
 }
 
 // Constructor for MtwsField
-impl MtwsField {
-    pub fn new(name: String, value: String) -> Self {
-        Self { value, name }
-    }
-}
+// Removed unused MtwsField::new function to resolve warning.
 
 // Constructor and builder for MtwsPayload
 impl MtwsPayload {
@@ -153,7 +149,6 @@ impl MtwsPayload {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct CombinedDeviceReading {
     pub id: Option<i64>,
-    pub vessel_id: String,
     pub reading_timestamp: i64,
     
     // GPS Data
@@ -171,7 +166,7 @@ pub struct CombinedDeviceReading {
     pub rpm_data: Option<String>,
     
     // Engine Durations (JSON for all engines)
-    pub engine_durations: Option<String>,
+    // pub engine_durations: Option<String>,
     
     // Environmental Data
     pub wind_speed: Option<f32>,
@@ -182,7 +177,7 @@ pub struct CombinedDeviceReading {
     pub external_power_voltage: Option<f32>,
     
     // Status Data
-    pub status_flags: Option<String>, // JSON for various status flags
+    // pub status_flags: Option<String>, // JSON for various status flags
     
     pub created_at: Option<i64>,
 }
@@ -269,5 +264,123 @@ impl Default for MtwsConfig {
             retry_delay_seconds: 60,
             auto_start: false,
         }
+    }
+}
+
+// AIO Module storage structures
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AioModuleReading {
+    pub id: Option<i64>,
+    pub device_address: u8,
+    pub unix_timestamp: i64,
+    pub baud_rate: u16,
+    
+    // Channel data stored as JSON
+    pub channels_data: String, // JSON array of AioChannelData
+    
+    // Digital inputs stored as bit mask
+    pub digital_inputs: i32, // 16 bits for DIN1-DIN16
+    
+    pub created_at: Option<i64>,
+}
+
+impl AioModuleReading {
+    pub fn from_aio_data(aio_data: &crate::devices::aio_module::AioModuleData) -> Self {
+        let channels_json = serde_json::to_string(&aio_data.channels).unwrap_or("[]".to_string());
+        
+        // Pack digital inputs into a 16-bit integer
+        let mut digital_inputs_packed = 0i32;
+        for (i, &din_state) in aio_data.digital_inputs.iter().enumerate() {
+            if din_state && i < 16 {
+                digital_inputs_packed |= 1 << i;
+            }
+        }
+        
+        Self {
+            id: None,
+            device_address: aio_data.device_address,
+            unix_timestamp: aio_data.unix_ts(),
+            baud_rate: aio_data.baud_rate,
+            channels_data: channels_json,
+            digital_inputs: digital_inputs_packed,
+            created_at: Some(aio_data.unix_ts()),
+        }
+    }
+    
+    pub fn get_digital_input(&self, din_number: u8) -> bool {
+        if din_number > 0 && din_number <= 16 {
+            (self.digital_inputs >> (din_number - 1)) & 1 == 1
+        } else {
+            false
+        }
+    }
+    
+    pub fn get_channels(&self) -> Result<Vec<AioChannelData>, serde_json::Error> {
+        serde_json::from_str(&self.channels_data)
+    }
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AioModuleStats {
+    pub total_readings: i64,
+    pub device_count: i64,
+    pub latest_timestamp: Option<i64>,
+    pub earliest_timestamp: Option<i64>,
+    pub avg_baud_rate: Option<f32>,
+    pub total_channels: i64,
+}
+
+// AIO Channel Duration tracking (similar to engine duration)
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct AioChannelDuration {
+    pub id: Option<i64>,
+    pub device_address: u8,
+    pub channel_id: u8,
+    pub channel_address: u8, // device_address * 100 + channel_id
+    pub duration_rpm_seconds: u64,
+    pub duration_ae_seconds: u64,
+    pub last_rpm_value: u16,
+    pub last_frequency: u16,
+    pub is_active: bool,
+    pub channel_type: String, // "rpm", "pulse", "frequency"
+    pub rpm_threshold: u16,
+    pub last_updated: i64,
+    pub created_at: i64,
+}
+
+impl AioChannelDuration {
+    pub fn new(device_address: u8, channel_id: u8, channel_type: String, rpm_threshold: u16) -> Self {
+        let now = Utc::now().timestamp();
+        Self {
+            id: None,
+            device_address,
+            channel_id,
+            channel_address: (device_address as u16 * 100 + channel_id as u16) as u8,
+            duration_rpm_seconds: 0,
+            duration_ae_seconds: 0,
+            last_rpm_value: 0,
+            last_frequency: 0,
+            is_active: false,
+            channel_type,
+            rpm_threshold,
+            last_updated: now,
+            created_at: now,
+        }
+    }
+    
+    pub fn duration_rpm_minutes(&self) -> u64 {
+        self.duration_rpm_seconds / 60
+    }
+    
+    pub fn duration_ae_minutes(&self) -> u64 {
+        self.duration_ae_seconds / 60
+    }
+    
+    pub fn duration_rpm_hours(&self) -> f32 {
+        self.duration_rpm_seconds as f32 / 3600.0
+    }
+    
+    pub fn duration_ae_hours(&self) -> f32 {
+        self.duration_ae_seconds as f32 / 3600.0
     }
 }

@@ -113,6 +113,13 @@ impl ApiService {
                                 .route("/status", web::get().to(mtws_status))
                                 .route("/config", web::get().to(get_mtws_config))
                         )
+                        .service(
+                            web::scope("/aio_module")
+                                .route("/devices", web::get().to(get_aio_module_devices))
+                                .route("/data/{address}", web::get().to(get_aio_module_data))
+                                .route("/readings/recent", web::get().to(get_recent_aio_module_readings))
+                                .route("/readings/{address}", web::get().to(get_aio_module_readings_by_address))
+                        )
                 )
         })
         .bind(format!("0.0.0.0:{}", port))?
@@ -437,5 +444,170 @@ async fn get_mtws_config(
             code: "SERVICE_UNAVAILABLE".to_string(),
             timestamp: Utc::now(),
         }))
+    }
+}
+// AIO Module API handlers
+
+// GET /api/aio_module/devices - Get list of configured AIO module devices
+async fn get_aio_module_devices(
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    if let Some(data_service) = &data.data_service {
+        let aio_devices = data_service.get_aio_module_devices();
+        
+        let devices_info: Vec<serde_json::Value> = aio_devices.iter().map(|device| {
+            serde_json::json!({
+                "address": device.address,
+                "name": device.name,
+                "location": device.location,
+                "device_type": device.device_type,
+                "enabled": device.enabled
+            })
+        }).collect();
+
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "devices": devices_info,
+            "count": devices_info.len()
+        })))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "Data service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// GET /api/aio_module/data/{address} - Get current AIO module data by address
+async fn get_aio_module_data(
+    path: web::Path<u8>,
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    let device_address = path.into_inner();
+    
+    if let Some(data_service) = &data.data_service {
+        match data_service.get_current_aio_module_data(device_address).await {
+            Some(aio_data) => {
+                Ok(HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "data": aio_data
+                })))
+            },
+            None => {
+                Ok(HttpResponse::NotFound().json(ErrorResponse {
+                    success: false,
+                    error: format!("No AIO module data found for address {}", device_address),
+                    code: "DATA_NOT_FOUND".to_string(),
+                    timestamp: Utc::now(),
+                }))
+            }
+        }
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(ErrorResponse {
+            success: false,
+            error: "Data service not available".to_string(),
+            code: "SERVICE_UNAVAILABLE".to_string(),
+            timestamp: Utc::now(),
+        }))
+    }
+}
+
+// GET /api/aio_module/readings/recent?limit=100 - Get recent AIO module readings
+async fn get_recent_aio_module_readings(
+    query: web::Query<serde_json::Value>,
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    let limit = query.get("limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100)
+        .min(1000); // Max limit of 1000
+
+    match data.sqlite_manager.get_recent_aio_module_readings(limit).await {
+        Ok(readings) => {
+            let readings_json: Vec<serde_json::Value> = readings.iter().map(|reading| {
+                serde_json::json!({
+                    "id": reading.id,
+                    "device_address": reading.device_address,
+                    "unix_timestamp": reading.unix_timestamp,
+                    "baud_rate": reading.baud_rate,
+                    "channels": reading.get_channels().unwrap_or_default(),
+                    "digital_inputs": (0..16).map(|i| reading.get_digital_input(i + 1)).collect::<Vec<bool>>(),
+                    "created_at": reading.created_at
+                })
+            }).collect();
+
+            Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "readings": readings_json,
+                "count": readings_json.len(),
+                "limit": limit
+            })))
+        },
+        Err(e) => {
+            error!("Failed to get recent AIO module readings: {}", e);
+            Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: format!("Database error: {}", e),
+                code: "DATABASE_ERROR".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
+    }
+}
+
+// GET /api/aio_module/readings/{address}?start_time=123&end_time=456 - Get AIO module readings by address and time range
+async fn get_aio_module_readings_by_address(
+    path: web::Path<u8>,
+    query: web::Query<serde_json::Value>,
+    data: web::Data<ApiServiceState>,
+) -> ActixResult<HttpResponse> {
+    let device_address = path.into_inner();
+    
+    let start_time = query.get("start_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+        
+    let end_time = query.get("end_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(Utc::now().timestamp());
+
+    match data.sqlite_manager.get_aio_module_readings_by_address_and_timerange(
+        device_address, start_time, end_time
+    ).await {
+        Ok(readings) => {
+            let readings_json: Vec<serde_json::Value> = readings.iter().map(|reading| {
+                serde_json::json!({
+                    "id": reading.id,
+                    "device_address": reading.device_address,
+                    "unix_timestamp": reading.unix_timestamp,
+                    "baud_rate": reading.baud_rate,
+                    "channels": reading.get_channels().unwrap_or_default(),
+                    "digital_inputs": (0..16).map(|i| reading.get_digital_input(i + 1)).collect::<Vec<bool>>(),
+                    "created_at": reading.created_at
+                })
+            }).collect();
+
+            Ok(HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "readings": readings_json,
+                "count": readings_json.len(),
+                "device_address": device_address,
+                "time_range": {
+                    "start_time": start_time,
+                    "end_time": end_time
+                }
+            })))
+        },
+        Err(e) => {
+            error!("Failed to get AIO module readings by address: {}", e);
+            Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: format!("Database error: {}", e),
+                code: "DATABASE_ERROR".to_string(),
+                timestamp: Utc::now(),
+            }))
+        }
     }
 }

@@ -164,6 +164,11 @@ impl MtwsService {
         client: &Client
     ) -> Result<MtwsPayload, ModbusError> {
         let payload = Self::build_payload(data_service).await?;
+        if let Err(e) = data_service.store_combined_device_reading().await {
+            warn!("⚠️ Failed to store combined reading during MTWS transmission: {}", e);
+        } else {
+            info!("💾 Stored combined reading during MTWS transmission");
+        }
         
         info!("🛰️ Sending MTWS structured payload to {} with {} fields", endpoint_url, payload.fields.len());
         // Print payload summary for debugging
@@ -587,81 +592,25 @@ impl MtwsService {
     pub async fn print_current_payload_static(data_service: &DataService) -> Result<(), ModbusError> {
         let payload = Self::build_payload(data_service).await?;
         
-        // Also print as JSON for easier viewing
+        // Serialize payload to JSON
+        let json_str = match serde_json::to_string_pretty(&payload) {
+            Ok(json) => json,
+            Err(e) => {
+                error!("Failed to serialize payload to JSON: {}", e);
+                return Err(ModbusError::InvalidData(format!("Serialization error: {}", e)));
+            }
+        };
+
+        // Print JSON for easier viewing
         println!("\n🔍 JSON REPRESENTATION:");
         println!("=======================");
-        match serde_json::to_string_pretty(&payload) {
-            Ok(json_str) => println!("{}", json_str),
-            Err(e) => error!("Failed to serialize payload to JSON: {}", e),
-        }
-        
+        println!("{}", json_str);
+
+        // Print payload size in bytes
+        let size_bytes = json_str.len();
+        println!("\n📦 Payload size: {} bytes", size_bytes);
+
         Ok(())
     }
 
-    // Add this method to get payload as formatted string
-    #[cfg(feature = "sqlite")]
-    pub async fn get_payload_summary(&self) -> Result<String, ModbusError> {
-        let payload = Self::build_payload(&self.data_service).await?;
-        
-        let mut summary = format!(
-            "MTWS Payload Summary:\n\
-             - SIN: {}\n\
-             - Name: {}\n\
-             - IsForward: {}\n\
-             - MIN: {}\n\
-             - Total Fields: {}\n\n\
-             Field Details:\n",
-            payload.sin, payload.name, payload.is_forward, payload.min, payload.fields.len()
-        );
-        
-        // Group fields by category for better readability
-        let mut gps_fields = Vec::new();
-        let mut flowmeter_fields = Vec::new();
-        let mut engine_fields = Vec::new();
-        let mut status_fields = Vec::new();
-        let mut other_fields = Vec::new();
-        
-        for field in &payload.fields {
-            if field.name.contains("longitude") || field.name.contains("latitude") || 
-               field.name.contains("speed") || field.name.contains("heading") || 
-               field.name.contains("altitude") || field.name.contains("gps") {
-                gps_fields.push(field);
-            } else if field.name.contains("flowmeter") {
-                flowmeter_fields.push(field);
-            } else if field.name.contains("engine") || field.name.contains("RPM") {
-                engine_fields.push(field);
-            } else if field.name.contains("status") {
-                status_fields.push(field);
-            } else {
-                other_fields.push(field);
-            }
-        }
-        
-        summary.push_str("\n📍 GPS Fields:\n");
-        for field in gps_fields {
-            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
-        }
-        
-        summary.push_str("\n🌊 Flowmeter Fields:\n");
-        for field in flowmeter_fields {
-            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
-        }
-        
-        summary.push_str("\n🔧 Engine/RPM Fields:\n");
-        for field in engine_fields {
-            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
-        }
-        
-        summary.push_str("\n⚡ Status Fields:\n");
-        for field in status_fields {
-            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
-        }
-        
-        summary.push_str("\n📦 Other Fields:\n");
-        for field in other_fields {
-            summary.push_str(&format!("  {} = {}\n", field.name, field.value));
-        }
-        
-        Ok(summary)
-    }
 }

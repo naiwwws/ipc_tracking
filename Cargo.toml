@@ -33,10 +33,10 @@ overflow-checks = true  # Keep overflow checks in debug
 # NEW: Features to reduce unnecessary dependencies
 [features]
 default = ["sqlite","api"]
-sqlite = ["sqlx"]
+sqlite = ["sqlx/sqlite"]
 api = ["actix-web"]
 minimal = []            # Minimal build without optional features
-arm-minimal = []        # ARM-specific minimal build without optional features
+arm-minimal = ["api", "sqlite"]        # ARM-specific minimal build without optional features
 
 [dependencies]
 # Core async runtime - minimal features

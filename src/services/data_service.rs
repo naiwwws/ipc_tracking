@@ -10,7 +10,7 @@ use tokio::signal;
 
 use crate::config::{Config, DeviceConfig}; // Add DeviceConfig import
 use crate::modbus::ModbusClient;
-use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice}; // Add RpmDevice
+use crate::devices::{Device, DeviceData, FlowmeterDevice, RpmDevice, AioModuleDevice}; // Add AioModuleDevice
 use crate::output::{DataFormatter, DataSender, ConsoleFormatter, ConsoleSender};
 use crate::output::raw_sender::{RawDataSender, RawDataFormat};
 #[cfg(feature = "sqlite")]
@@ -28,8 +28,8 @@ pub struct DataService {
     device_data_by_address: Arc<Mutex<HashMap<u8, Box<dyn DeviceData>>>>, // Add this field
     device_address_to_uuid: HashMap<u8, String>,
     modbus_client: Arc<ModbusClient>,
-    formatter: Box<dyn DataFormatter>,
-    senders: Vec<Box<dyn DataSender>>,
+    // formatter: Box<dyn DataFormatter>,
+    // senders: Vec<Box<dyn DataSender>>,
     #[cfg(feature = "sqlite")]
     database_service: Option<DatabaseService>,
     polling_handle: Arc<TokioMutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -63,8 +63,8 @@ impl Clone for DataService {
             device_data_by_address: self.device_data_by_address.clone(),
             device_address_to_uuid: self.device_address_to_uuid.clone(),
             modbus_client: self.modbus_client.clone(),
-            formatter: Box::new(ConsoleFormatter),
-            senders: Vec::new(),
+            // formatter: Box::new(ConsoleFormatter),
+            // senders: Vec::new(),
             #[cfg(feature = "sqlite")]
             database_service: self.database_service.clone(),
             polling_handle: self.polling_handle.clone(),
@@ -111,11 +111,25 @@ impl DataService {
                         
                         devices.push(Box::new(rpm_device));
                         
-                        info!("📋 Configured multi-channel RPM device with {} channels at address {}", 
+                        info!("Configured multi-channel RPM device with {} channels at address {}", 
                               total_channels, device_config.address);
                     }
+                    "aio_module" => {
+                        let aio_device = AioModuleDevice::new(
+                            device_config.address,
+                            device_config.name.clone(),
+                            device_config.location.clone(),
+                            10, // Default update interval: 10 seconds
+                            1000, // Default timeout: 1000 ms
+                        );
+                        
+                        devices.push(Box::new(aio_device));
+                        
+                        info!("Configured AIO module device '{}' at address {}", 
+                              device_config.name, device_config.address);
+                    }
                     _ => {
-                        warn!("⚠️ Unknown device type: {}", device_config.device_type);
+                        warn!("Unknown device type: {}", device_config.device_type);
                         continue;
                     }
                 }
@@ -194,8 +208,8 @@ impl DataService {
             device_data_by_address: Arc::new(Mutex::new(HashMap::new())),
             device_address_to_uuid,
             modbus_client,
-            formatter,
-            senders,
+            // formatterca,
+            // senders,
             #[cfg(feature = "sqlite")]
             database_service,
             polling_handle: Arc::new(TokioMutex::new(None)),
@@ -528,6 +542,13 @@ impl DataService {
             .collect()
     }
 
+    // Get AIO module devices configuration
+    pub fn get_aio_module_devices(&self) -> Vec<&DeviceConfig> {
+        self.config.devices.iter()
+            .filter(|d| d.enabled && d.device_type == "aio_module")
+            .collect()
+    }
+
     // Device data retrieval method
     pub async fn get_device_data_by_address(&self, device_address: u8) -> Option<String> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
@@ -555,6 +576,17 @@ impl DataService {
         None
     }
 
+    pub async fn get_current_aio_module_data(&self, device_address: u8) -> Option<crate::devices::aio_module::AioModuleData> {
+        if let Ok(address_map) = self.device_data_by_address.lock() {
+            if let Some(device_data) = address_map.get(&device_address) {
+                if let Some(aio_data) = device_data.as_any().downcast_ref::<crate::devices::aio_module::AioModuleData>() {
+                    return Some(aio_data.clone());
+                }
+            }
+        }
+        None
+    }
+
     // Engine duration tracking
     pub async fn get_engine_durations(&self) -> HashMap<u8, i32> {
         // TODO: Implement database storage and retrieval for engine durations
@@ -568,15 +600,15 @@ impl DataService {
     }
 
     // CLI interface methods
-    pub fn set_formatter(&mut self, formatter: Box<dyn DataFormatter>) {
-        self.formatter = formatter;
-        info!("🎨 Output formatter changed to: {}", self.formatter.formatter_type());
-    }
+    // pub fn set_formatter(&mut self, formatter: Box<dyn DataFormatter>) {
+    //     self.formatter = formatter;
+    //     info!("🎨 Output formatter changed to: {}", self.formatter.formatter_type());
+    // }
 
-    pub fn add_sender(&mut self, sender: Box<dyn DataSender>) {
-        info!("📡 Adding output sender: {}", sender.sender_type());
-        self.senders.push(sender);
-    }
+    // pub fn add_sender(&mut self, sender: Box<dyn DataSender>) {
+    //     info!("📡 Adding output sender: {}", sender.sender_type());
+    //     self.senders.push(sender);
+    // }
 
     #[cfg(feature = "sqlite")]
     pub fn get_database_service(&self) -> Option<&DatabaseService> {
@@ -826,11 +858,36 @@ impl DataService {
 
         // Store to database
         #[cfg(feature = "sqlite")]
-        self.store_device_data_to_database(device_address, device_data.as_ref()).await?;
+    //    if let Some(db_service) = &self.database_service {
+    //         if let Err(e) = self.store_device_data_to_database(device_address, device_data.as_ref()).await {
+    //             error!("❌ Failed to store device data to database: {}", e);
+    //         } else {
+    //             info!("💾 Successfully stored device data to database for address {}", device_address);
+    //         }
+    //     }
+
+        // NEW: Store combined reading after collecting data from multiple devices
+        #[cfg(feature = "sqlite")]
+         if self.should_store_combined_reading(device_address).await {
+            if let Err(e) = self.store_combined_device_reading().await {
+                error!("❌ Failed to store combined device reading: {}", e);
+            } else {
+                info!("💾 Successfully stored combined device reading");
+            }
+        }
 
         Ok(())
     }
 
+        #[cfg(feature = "sqlite")]
+    async fn should_store_combined_reading(&self, _device_address: u8) -> bool {
+        // Store combined reading every 10th device reading, or based on time interval
+        static mut READING_COUNTER: usize = 0;
+        unsafe {
+            READING_COUNTER += 1;
+            READING_COUNTER % 10 == 0 // Store every 10 device readings
+        }
+    }
     // Get RPM channel data
     pub async fn get_rpm_channel_data(&self, device_address: u8, channel_id: u8) -> Option<String> {
         if let Ok(address_map) = self.device_data_by_address.lock() {
@@ -914,5 +971,147 @@ impl DataService {
         }
         
         result
+    }
+
+    // NEW: Store combined device reading
+    #[cfg(feature = "sqlite")]
+    pub async fn store_combined_device_reading(&self) -> Result<(), ModbusError> {
+        if let Some(db_service) = &self.database_service {
+            let combined_reading = self.build_combined_device_reading().await?;
+            
+            match db_service.get_sqlite_manager().insert_combined_reading(&combined_reading).await {
+                Ok(_) => {
+                    info!("💾 Stored combined device reading to database");
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("❌ Failed to store combined device reading: {}", e);
+                    Err(e)
+                }
+            }
+        } else {
+            Err(ModbusError::ServiceNotAvailable("Database service not available".to_string()))
+        }
+    }
+
+    // NEW: Build combined reading from all current data
+    #[cfg(feature = "sqlite")]
+    async fn build_combined_device_reading(&self) -> Result<crate::storage::models::CombinedDeviceReading, ModbusError> {
+        use crate::storage::models::CombinedDeviceReading;
+        
+        let timestamp = chrono::Utc::now().timestamp();
+        
+        // Collect GPS data
+        let gps_data = self.get_current_gps_data().await;
+        let (latitude, longitude, speed, course, altitude, satellites) = if let Some(ref gps) = gps_data {
+            (
+                gps.latitude,
+                gps.longitude, 
+                gps.speed,
+                gps.course,
+                gps.altitude,
+                gps.satellites.map(|s| s as u8)
+            )
+        } else {
+            (None, None, None, None, None, None)
+        };
+
+        // Collect flowmeter data from all devices
+        let flowmeter_devices = self.get_flowmeter_devices();
+        let flowmeter_count = flowmeter_devices.len();
+        let mut flowmeter_data_map = serde_json::Map::new();
+        
+        for device_config in flowmeter_devices {
+            if let Some(flowmeter_data) = self.get_current_flowmeter_data(device_config.address).await {
+                let device_data = serde_json::json!({
+                    "device_address": device_config.address,
+                    "device_name": device_config.name,
+                    "mass_flow_rate": flowmeter_data.mass_flow_rate,
+                    "temperature": flowmeter_data.temperature,
+                    "density_flow": flowmeter_data.density_flow,
+                    "volume_flow_rate": flowmeter_data.volume_flow_rate,
+                    "mass_total": flowmeter_data.mass_total,
+                    "volume_total": flowmeter_data.volume_total,
+                    "error_code": flowmeter_data.error_code
+                });
+                flowmeter_data_map.insert(format!("device_{}", device_config.address), device_data);
+            }
+        }
+
+        // Collect RPM data from all devices
+        let rpm_devices = self.get_rpm_devices();
+        let rpm_count = rpm_devices.len();
+        let mut rpm_data_map = serde_json::Map::new();
+        let mut engine_durations_map = serde_json::Map::new();
+        
+        for device_config in rpm_devices {
+            if let Some(device_data_str) = self.get_device_data_by_address(device_config.address).await {
+                if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&device_data_str) {
+                    rpm_data_map.insert(format!("device_{}", device_config.address), json_data.clone());
+                    
+                    // Extract engine durations if available
+                    if let Some(channels) = json_data["channels"].as_array() {
+                        for (i, channel) in channels.iter().enumerate() {
+                            let engine_address = format!("{}_{}", device_config.address, i + 1);
+                            let duration = channel["engine_duration_seconds"].as_i64().unwrap_or(0);
+                            engine_durations_map.insert(engine_address, serde_json::json!(duration));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Convert to JSON strings for storage
+        let flowmeter_json = if flowmeter_data_map.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&flowmeter_data_map).unwrap_or_default())
+        };
+
+        let rpm_json = if rpm_data_map.is_empty() {
+            None  
+        } else {
+            Some(serde_json::to_string(&rpm_data_map).unwrap_or_default())
+        };
+
+        // let engine_durations_json = if engine_durations_map.is_empty() {
+        //     None
+        // } else {
+        //     Some(serde_json::to_string(&engine_durations_map).unwrap_or_default())
+        // };
+
+        // Create status flags
+        // let status_flags = serde_json::json!({
+        //     "gps_available": gps_data.is_some(),
+        //     "flowmeter_count": flowmeter_count,
+        //     "rpm_device_count": rpm_count,
+        //     "timestamp_utc": timestamp
+        // });
+
+        let combined_reading = CombinedDeviceReading {
+            id: None,
+            // vessel_id,
+            reading_timestamp: timestamp,
+            latitude,
+            longitude,
+            speed,
+            course,
+            altitude,
+            satellites,
+            flowmeter_data: flowmeter_json,
+            rpm_data: rpm_json,
+            // engine_durations: engine_durations_json,
+            wind_speed: None, // TODO: Add wind sensor support
+            wind_direction: None,
+            battery_voltage: Some(8.086), // Example values
+            external_power_voltage: Some(27.838),
+            // status_flags: Some(serde_json::to_string(&status_flags).unwrap_or_default()),
+            created_at: None,
+        };
+
+        info!("📦 Built combined device reading with {} flowmeters, {} RPM devices", 
+              flowmeter_count, rpm_count);
+
+        Ok(combined_reading)
     }
 }

@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use crate::config::Config;
 use crate::devices::traits::DeviceData;
 use crate::devices::flowmeter::FlowmeterData;
-use crate::storage::{SqliteManager, models::{FlowmeterReading, FlowmeterStats}};
+use crate::devices::aio_module::AioModuleData;
+use crate::storage::{SqliteManager, models::{FlowmeterReading, FlowmeterStats, AioModuleReading}};
 use crate::utils::error::ModbusError;
 
 #[derive(Clone)]
@@ -44,10 +45,13 @@ impl DatabaseService {
         device_address: u8,
         device_data: &dyn DeviceData,
     ) -> Result<(), ModbusError> {
-        // Convert DeviceData to FlowmeterReading if it's flowmeter data
+        // Convert DeviceData to appropriate reading type
         if let Some(flowmeter_data) = device_data.as_any().downcast_ref::<FlowmeterData>() {
             let reading = FlowmeterReading::from_flowmeter_data(device_address, flowmeter_data);
             self.add_flowmeter_to_batch(vec![reading]).await?;
+        } else if let Some(aio_data) = device_data.as_any().downcast_ref::<AioModuleData>() {
+            let reading = AioModuleReading::from_aio_data(aio_data);
+            self.store_aio_module_reading(&reading).await?;
         }
         
         // Update device status
@@ -145,8 +149,33 @@ impl DatabaseService {
         Ok(())
     }
 
-    // Method to get SqliteManager for API service
-    pub fn get_sqlite_manager(&self) -> &SqliteManager {
+    // NEW: Expose sqlite manager for combined readings
+    pub fn get_sqlite_manager(&self) -> &crate::storage::sqlite_manager::SqliteManager {
         &self.sqlite_manager
+    }
+
+    // NEW: Store combined reading method
+    pub async fn store_combined_reading(&self, reading: &crate::storage::models::CombinedDeviceReading) -> Result<(), ModbusError> {
+        self.sqlite_manager.insert_combined_reading(reading).await
+    }
+
+    pub async fn store_aio_module_reading(&self, reading: &AioModuleReading) -> Result<(), ModbusError> {
+        self.sqlite_manager.store_aio_module_reading(reading).await?;
+        debug!("Stored AIO module reading from device {} at timestamp {}", 
+               reading.device_address, reading.unix_timestamp);
+        Ok(())
+    }
+
+    pub async fn get_recent_aio_module_readings(&self, limit: i64) -> Result<Vec<AioModuleReading>, ModbusError> {
+        self.sqlite_manager.get_recent_aio_module_readings(limit).await
+    }
+
+    pub async fn get_aio_module_readings_by_address_and_timerange(
+        &self,
+        device_address: u8,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<AioModuleReading>, ModbusError> {
+        self.sqlite_manager.get_aio_module_readings_by_address_and_timerange(device_address, start_time, end_time).await
     }
 }
