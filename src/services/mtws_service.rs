@@ -508,15 +508,15 @@ impl MtwsService {
                   device_index + 1, device_address, device_config.name);
 
             if let Some(aio_data) = data_service.get_current_aio_module_data(device_address).await {
-                // Add analog channel data (4 channels per device)
-                for channel_data in &aio_data.channels {
-                    // payload.add_field(format!("aio{}Ch{}Pulse", device_address, channel_data.channel_id), channel_data.pulse_count.to_string());
-                    // payload.add_field(format!("aio{}Ch{}Threshold", device_address, channel_data.channel_id), channel_data.threshold.to_string());
-                    // payload.add_field(format!("aio{}Ch{}Frequency", device_address, channel_data.channel_id), channel_data.frequency.to_string());
+                // Add RPM channel data (4 RPM sensor channels per device)
+                for channel_data in &aio_data.rpm_channels {
+                    payload.add_field(format!("aio{}Ch{}GearPulse", device_address, channel_data.channel_id), channel_data.gear_pulse_count.to_string());
+                    payload.add_field(format!("aio{}Ch{}Threshold", device_address, channel_data.channel_id), channel_data.rpm_threshold.to_string());
+                    payload.add_field(format!("aio{}Ch{}Frequency", device_address, channel_data.channel_id), channel_data.frequency_hz.to_string());
                     payload.add_field(format!("aio{}Ch{}RPM", device_address, channel_data.channel_id), channel_data.rpm_value.to_string());
-                    payload.add_field(format!("aio{}Ch{}Average", device_address, channel_data.channel_id), channel_data.average_value.to_string());
-                    payload.add_field(format!("aio{}Ch{}DurationRPM", device_address, channel_data.channel_id), channel_data.duration_rpm.to_string());
-                    payload.add_field(format!("aio{}Ch{}DurationAE", device_address, channel_data.channel_id), channel_data.duration_ae.to_string());
+                    payload.add_field(format!("aio{}Ch{}Average", device_address, channel_data.channel_id), channel_data.rpm_average.to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationRPM", device_address, channel_data.channel_id), channel_data.duration_rpm_minutes.to_string());
+                    payload.add_field(format!("aio{}Ch{}DurationAE", device_address, channel_data.channel_id), channel_data.duration_ae_minutes.to_string());
                 }
 
                 // Add digital input state (convert Vec<bool> to u16 bitmask)
@@ -528,14 +528,14 @@ impl MtwsService {
                 }
                 payload.add_field(format!("aio{}DigitalInputs", device_address), digital_bitmask.to_string());
 
-                info!("✅ Added AIO module {} data: {} channels, digital inputs=0x{:04X}", 
-                      device_address, aio_data.channels.len(), digital_bitmask);
+                info!("✅ Added AIO RPM module {} data: {} RPM channels, digital inputs=0x{:04X}", 
+                      device_address, aio_data.rpm_channels.len(), digital_bitmask);
             } else {
                 warn!("⚠️ No data found for AIO module at address {}", device_address);
                 
-                // Add default values for offline AIO device (4 channels)
+                // Add default values for offline AIO RPM device (4 RPM channels)
                 for channel_id in 1..=4 {
-                    payload.add_field(format!("aio{}Ch{}Pulse", device_address, channel_id), "0".to_string());
+                    payload.add_field(format!("aio{}Ch{}GearPulse", device_address, channel_id), "0".to_string());
                     payload.add_field(format!("aio{}Ch{}Threshold", device_address, channel_id), "0".to_string());
                     payload.add_field(format!("aio{}Ch{}Frequency", device_address, channel_id), "0".to_string());
                     payload.add_field(format!("aio{}Ch{}RPM", device_address, channel_id), "0".to_string());

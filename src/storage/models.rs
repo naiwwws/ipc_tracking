@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::devices::{traits::DeviceData, RpmChannelData, AioChannelData};
+use crate::devices::{traits::DeviceData, RpmChannelData};
 
 // MINIMAL: Essential flowmeter reading structure
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -286,7 +286,7 @@ pub struct AioModuleReading {
 
 impl AioModuleReading {
     pub fn from_aio_data(aio_data: &crate::devices::aio_module::AioModuleData) -> Self {
-        let channels_json = serde_json::to_string(&aio_data.channels).unwrap_or("[]".to_string());
+        let channels_json = serde_json::to_string(&aio_data.rpm_channels).unwrap_or("[]".to_string());
         
         // Pack digital inputs into a 16-bit integer
         let mut digital_inputs_packed = 0i32;
@@ -315,7 +315,7 @@ impl AioModuleReading {
         }
     }
     
-    pub fn get_channels(&self) -> Result<Vec<AioChannelData>, serde_json::Error> {
+    pub fn get_rpm_channels(&self) -> Result<Vec<crate::devices::aio_module::AioRpmChannelData>, serde_json::Error> {
         serde_json::from_str(&self.channels_data)
     }
 }

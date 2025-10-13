@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex as TokioMutex};
-use tokio::time::{Duration, interval, timeout};
+use tokio::time::{Duration, interval};
 use log::{info, warn, error, debug};
 use crate::utils::error::ModbusError;
 use super::{GpsReader, GpsData};

@@ -865,7 +865,7 @@ async fn handle_enhanced_add_command(
                 return Err("Analog channels must be between 1 and 8".into());
             }
 
-            parameters.insert("total_analog_channels".to_string(), analog_channels.to_string());
+            parameters.insert("total_rpm_channels".to_string(), analog_channels.to_string());
 
             // Digital inputs (optional, default 16)
             let digital_inputs = matches.get_one::<String>("digital-inputs")
@@ -942,7 +942,7 @@ async fn handle_enhanced_add_command(
             parameters.insert("baud_rate".to_string(), "9600".to_string());
 
         } else {
-            return Err("AIO devices require --analog-channels parameter".into());
+            return Err("AIO RPM devices require --analog-channels parameter (number of RPM sensor channels)".into());
         }
     }
 

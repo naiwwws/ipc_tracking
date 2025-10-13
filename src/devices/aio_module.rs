@@ -17,14 +17,14 @@ pub struct AioModuleDevice {
     pub location: String,
     pub update_interval_seconds: u64,
     pub timeout_ms: u64,
-    pub channels: Vec<AioChannelConfig>,
+    pub channels: Vec<AioRpmChannelConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AioChannelConfig {
+pub struct AioRpmChannelConfig {
     pub channel_id: u8,
     pub channel_name: String,
-    pub channel_type: String, // "rpm", "pulse", "frequency"
+    pub rpm_threshold: u16,  // RPM threshold for this channel
     pub enabled: bool,
 }
 
@@ -35,20 +35,20 @@ pub struct AioModuleData {
     pub device_location: String,
     pub timestamp: DateTime<Utc>,
     pub baud_rate: u16,
-    pub channels: Vec<AioChannelData>,
+    pub rpm_channels: Vec<AioRpmChannelData>,  // 4 RPM sensor channels
     pub digital_inputs: Vec<bool>, // DIN1-DIN16
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AioChannelData {
+pub struct AioRpmChannelData {
     pub channel_id: u8,
-    pub pulse_count: u16,
-    pub threshold: u16,
-    pub frequency: u16,
-    pub rpm_value: u16,
-    pub average_value: u16,
-    pub duration_rpm: u32,  // Engine running duration in RPM mode
-    pub duration_ae: u32,   // Auxiliary engine duration
+    pub gear_pulse_count: u16,    // Gear pulse counter
+    pub rpm_threshold: u16,       // RPM threshold setting
+    pub frequency_hz: u16,        // Frequency generated from RPM sensor
+    pub rpm_value: u16,           // Current RPM reading
+    pub rpm_average: u16,         // Average RPM value
+    pub duration_rpm_minutes: u32,    // Engine running duration in RPM mode (minutes)
+    pub duration_ae_minutes: u32,     // Auxiliary Engine duration (minutes)
 }
 
 impl AioModuleDevice {
@@ -59,13 +59,13 @@ impl AioModuleDevice {
         update_interval_seconds: u64,
         timeout_ms: u64,
     ) -> Self {
-        // Default 4-channel configuration
-        let mut channels = Vec::new();
+        // Default 4 RPM channel configuration
+        let mut rpm_channels = Vec::new();
         for i in 1..=4 {
-            channels.push(AioChannelConfig {
+            rpm_channels.push(AioRpmChannelConfig {
                 channel_id: i,
-                channel_name: format!("Channel {}", i),
-                channel_type: "rpm".to_string(),
+                channel_name: format!("RPM Channel {}", i),
+                rpm_threshold: 500,  // Default 500 RPM threshold
                 enabled: true,
             });
         }
@@ -76,12 +76,12 @@ impl AioModuleDevice {
             location,
             update_interval_seconds,
             timeout_ms,
-            channels,
+            channels: rpm_channels,
         }
     }
 
-    pub fn with_channels(mut self, channels: Vec<AioChannelConfig>) -> Self {
-        self.channels = channels;
+    pub fn with_rpm_channels(mut self, rpm_channels: Vec<AioRpmChannelConfig>) -> Self {
+        self.channels = rpm_channels;
         self
     }
 
@@ -103,62 +103,62 @@ impl AioModuleDevice {
         let baud_rate = ((raw_data[0] as u16) << 8) | (raw_data[1] as u16);
         
         // Parse 4 channels exactly as Lua does
-        let mut channels = Vec::new();
+        let mut rpm_channels = Vec::new();
         for y in 0..4 {
-            // PULSE_CH: arg[3 + 2*y] << 8 | arg[4 + 2*y]
+            // PULSE_CH: gear pulse count - arg[3 + 2*y] << 8 | arg[4 + 2*y]
             // For y=0: arg[3] << 8 | arg[4] -> raw_data[2] << 8 | raw_data[3]
             let pulse_idx = 2 + 2 * y;
-            let pulse_count = ((raw_data[pulse_idx] as u16) << 8) | (raw_data[pulse_idx + 1] as u16);
+            let gear_pulse_count = ((raw_data[pulse_idx] as u16) << 8) | (raw_data[pulse_idx + 1] as u16);
             
-            // THRESHOLD_CH: arg[11 + 2*y] << 8 | arg[12 + 2*y]
+            // THRESHOLD_CH: RPM threshold setting - arg[11 + 2*y] << 8 | arg[12 + 2*y]
             // For y=0: arg[11] << 8 | arg[12] -> raw_data[10] << 8 | raw_data[11]
             let threshold_idx = 10 + 2 * y;
-            let threshold = ((raw_data[threshold_idx] as u16) << 8) | (raw_data[threshold_idx + 1] as u16);
+            let rpm_threshold = ((raw_data[threshold_idx] as u16) << 8) | (raw_data[threshold_idx + 1] as u16);
             
-            // FREQ_CH: arg[19 + 2*y] << 8 | arg[20 + 2*y]
+            // FREQ_CH: frequency from RPM sensor - arg[19 + 2*y] << 8 | arg[20 + 2*y]
             // For y=0: arg[19] << 8 | arg[20] -> raw_data[18] << 8 | raw_data[19]
             let freq_idx = 18 + 2 * y;
-            let frequency = ((raw_data[freq_idx] as u16) << 8) | (raw_data[freq_idx + 1] as u16);
+            let frequency_hz = ((raw_data[freq_idx] as u16) << 8) | (raw_data[freq_idx + 1] as u16);
             
-            // RPM_CH: arg[27 + 2*y] << 8 | arg[28 + 2*y]
+            // RPM_CH: actual RPM value - arg[27 + 2*y] << 8 | arg[28 + 2*y]
             // For y=0: arg[27] << 8 | arg[28] -> raw_data[26] << 8 | raw_data[27]
             let rpm_idx = 26 + 2 * y;
             let rpm_value = ((raw_data[rpm_idx] as u16) << 8) | (raw_data[rpm_idx + 1] as u16);
             
-            // AVG_CH: arg[35 + 2*y] << 8 | arg[36 + 2*y]
+            // AVG_CH: average RPM value - arg[35 + 2*y] << 8 | arg[36 + 2*y]
             // For y=0: arg[35] << 8 | arg[36] -> raw_data[34] << 8 | raw_data[35]
             let avg_idx = 34 + 2 * y;
-            let average_value = ((raw_data[avg_idx] as u16) << 8) | (raw_data[avg_idx + 1] as u16);
+            let rpm_average = ((raw_data[avg_idx] as u16) << 8) | (raw_data[avg_idx + 1] as u16);
             
-            // DUR_RPM_CH: arg[47 + 4*y] << 24 | arg[48 + 4*y] << 16 | arg[49 + 4*y] << 8 | arg[50 + 4*y]
+            // DUR_RPM_CH: engine duration in RPM mode - arg[47 + 4*y] << 24 | ... 
             // For y=0: arg[47-50] -> raw_data[46-49]
             let dur_rpm_idx = 46 + 4 * y;
-            let duration_rpm = ((raw_data[dur_rpm_idx] as u32) << 24)
-                             | ((raw_data[dur_rpm_idx + 1] as u32) << 16)
-                             | ((raw_data[dur_rpm_idx + 2] as u32) << 8)
-                             | (raw_data[dur_rpm_idx + 3] as u32);
+            let duration_rpm_minutes = ((raw_data[dur_rpm_idx] as u32) << 24)
+                                     | ((raw_data[dur_rpm_idx + 1] as u32) << 16)
+                                     | ((raw_data[dur_rpm_idx + 2] as u32) << 8)
+                                     | (raw_data[dur_rpm_idx + 3] as u32);
             
-            // DUR_AE: arg[63 + 4*y] << 24 | arg[64 + 4*y] << 16 | arg[65 + 4*y] << 8 | arg[66 + 4*y]
+            // DUR_AE: auxiliary engine duration - arg[63 + 4*y] << 24 | ...
             // For y=0: arg[63-66] -> raw_data[62-65]
             let dur_ae_idx = 62 + 4 * y;
-            let duration_ae = ((raw_data[dur_ae_idx] as u32) << 24)
-                            | ((raw_data[dur_ae_idx + 1] as u32) << 16)
-                            | ((raw_data[dur_ae_idx + 2] as u32) << 8)
-                            | (raw_data[dur_ae_idx + 3] as u32);
+            let duration_ae_minutes = ((raw_data[dur_ae_idx] as u32) << 24)
+                                    | ((raw_data[dur_ae_idx + 1] as u32) << 16)
+                                    | ((raw_data[dur_ae_idx + 2] as u32) << 8)
+                                    | (raw_data[dur_ae_idx + 3] as u32);
 
-            channels.push(AioChannelData {
+            rpm_channels.push(AioRpmChannelData {
                 channel_id: (y + 1) as u8,
-                pulse_count,
-                threshold,
-                frequency,
+                gear_pulse_count,
+                rpm_threshold,
+                frequency_hz,
                 rpm_value,
-                average_value,
-                duration_rpm,
-                duration_ae,
+                rpm_average,
+                duration_rpm_minutes,
+                duration_ae_minutes,
             });
 
-            info!("📊 Channel {}: pulse={}, threshold={}, freq={}, rpm={}, avg={}, dur_rpm={}, dur_ae={}", 
-                  y + 1, pulse_count, threshold, frequency, rpm_value, average_value, duration_rpm, duration_ae);
+            info!("📊 RPM Ch{}: gear_pulse={}, threshold={}, freq={}Hz, rpm={}, avg={}, dur_rpm={}min, dur_ae={}min", 
+                  y + 1, gear_pulse_count, rpm_threshold, frequency_hz, rpm_value, rpm_average, duration_rpm_minutes, duration_ae_minutes);
         }
 
         // DIN_STATE: dinTmp = arg[43] << 8 | arg[44] -> raw_data[42] << 8 | raw_data[43]
@@ -170,8 +170,8 @@ impl AioModuleDevice {
             digital_inputs.push((din_word >> j) & 0x1 == 1);
         }
 
-        info!("📊 AIO Parsed: baud_rate={}, din_word=0b{:016b}, {} channels", 
-              baud_rate, din_word, channels.len());
+        info!("📊 AIO RPM Module Parsed: baud_rate={}, din_word=0b{:016b}, {} RPM channels", 
+              baud_rate, din_word, rpm_channels.len());
 
         Ok(AioModuleData {
             device_address: self.address,
@@ -179,7 +179,7 @@ impl AioModuleDevice {
             device_location: self.location.clone(),
             timestamp: Utc::now(),
             baud_rate,
-            channels,
+            rpm_channels,
             digital_inputs,
         })
     }
@@ -241,8 +241,8 @@ impl Device for AioModuleDevice {
 
         let aio_data = self.parse_modbus_response(&raw_data)?;
         
-        info!("Successfully read AIO module data: {} channels, baud_rate={}", 
-              aio_data.channels.len(), aio_data.baud_rate);
+        info!("Successfully read AIO RPM module data: {} RPM channels, baud_rate={}", 
+              aio_data.rpm_channels.len(), aio_data.baud_rate);
 
         Ok(Box::new(aio_data))
     }
@@ -277,15 +277,15 @@ impl DeviceData for AioModuleData {
             "device_name": self.device_name,
             "unix_ts": self.timestamp.timestamp(),
             "baud_rate": self.baud_rate,
-            "channels": self.channels.iter().map(|ch| json!({
+            "rpm_channels": self.rpm_channels.iter().map(|ch| json!({
                 "channel_id": ch.channel_id,
-                "pulse_count": ch.pulse_count,
-                "threshold": ch.threshold,
-                "frequency": ch.frequency,
+                "gear_pulse_count": ch.gear_pulse_count,
+                "rpm_threshold": ch.rpm_threshold,
+                "frequency_hz": ch.frequency_hz,
                 "rpm_value": ch.rpm_value,
-                "average_value": ch.average_value,
-                "duration_rpm": ch.duration_rpm,
-                "duration_ae": ch.duration_ae
+                "rpm_average": ch.rpm_average,
+                "duration_rpm_minutes": ch.duration_rpm_minutes,
+                "duration_ae_minutes": ch.duration_ae_minutes
             })).collect::<Vec<_>>(),
             "digital_inputs": self.digital_inputs.iter().enumerate().map(|(i, &din)| {
                 json!({
@@ -301,22 +301,22 @@ impl DeviceData for AioModuleData {
             "baud_rate" => Some(self.baud_rate.to_string()),
             "device_name" => Some(self.device_name.clone()),
             "device_location" => Some(self.device_location.clone()),
-            "channel_count" => Some(self.channels.len().to_string()),
+            "rpm_channel_count" => Some(self.rpm_channels.len().to_string()),
             "digital_input_count" => Some(self.digital_inputs.len().to_string()),
             _ => {
-                // Check for channel-specific parameters
+                // Check for RPM channel-specific parameters
                 if name.starts_with("ch") {
                     if let Some(parts) = name.strip_prefix("ch").and_then(|s| s.split_once("_")) {
                         if let Ok(ch_num) = parts.0.parse::<u8>() {
-                            if let Some(channel) = self.channels.iter().find(|ch| ch.channel_id == ch_num) {
+                            if let Some(channel) = self.rpm_channels.iter().find(|ch| ch.channel_id == ch_num) {
                                 return match parts.1 {
-                                    "pulse" => Some(channel.pulse_count.to_string()),
-                                    "threshold" => Some(channel.threshold.to_string()),
-                                    "frequency" => Some(channel.frequency.to_string()),
+                                    "gear_pulse" => Some(channel.gear_pulse_count.to_string()),
+                                    "threshold" => Some(channel.rpm_threshold.to_string()),
+                                    "frequency" => Some(channel.frequency_hz.to_string()),
                                     "rpm" => Some(channel.rpm_value.to_string()),
-                                    "average" => Some(channel.average_value.to_string()),
-                                    "duration_rpm" => Some(channel.duration_rpm.to_string()),
-                                    "duration_ae" => Some(channel.duration_ae.to_string()),
+                                    "average" => Some(channel.rpm_average.to_string()),
+                                    "duration_rpm" => Some(channel.duration_rpm_minutes.to_string()),
+                                    "duration_ae" => Some(channel.duration_ae_minutes.to_string()),
                                     _ => None,
                                 };
                             }
@@ -345,20 +345,20 @@ impl DeviceData for AioModuleData {
             ("baud_rate".to_string(), self.baud_rate.to_string()),
             ("device_name".to_string(), self.device_name.clone()),
             ("device_location".to_string(), self.device_location.clone()),
-            ("channel_count".to_string(), self.channels.len().to_string()),
+            ("rpm_channel_count".to_string(), self.rpm_channels.len().to_string()),
             ("digital_input_count".to_string(), self.digital_inputs.len().to_string()),
         ];
 
-        // Add channel parameters
-        for channel in &self.channels {
+        // Add RPM channel parameters
+        for channel in &self.rpm_channels {
             let ch_prefix = format!("ch{}", channel.channel_id);
-            params.push((format!("{}_pulse", ch_prefix), channel.pulse_count.to_string()));
-            params.push((format!("{}_threshold", ch_prefix), channel.threshold.to_string()));
-            params.push((format!("{}_frequency", ch_prefix), channel.frequency.to_string()));
+            params.push((format!("{}_gear_pulse", ch_prefix), channel.gear_pulse_count.to_string()));
+            params.push((format!("{}_threshold", ch_prefix), channel.rpm_threshold.to_string()));
+            params.push((format!("{}_frequency", ch_prefix), channel.frequency_hz.to_string()));
             params.push((format!("{}_rpm", ch_prefix), channel.rpm_value.to_string()));
-            params.push((format!("{}_average", ch_prefix), channel.average_value.to_string()));
-            params.push((format!("{}_duration_rpm", ch_prefix), channel.duration_rpm.to_string()));
-            params.push((format!("{}_duration_ae", ch_prefix), channel.duration_ae.to_string()));
+            params.push((format!("{}_average", ch_prefix), channel.rpm_average.to_string()));
+            params.push((format!("{}_duration_rpm", ch_prefix), channel.duration_rpm_minutes.to_string()));
+            params.push((format!("{}_duration_ae", ch_prefix), channel.duration_ae_minutes.to_string()));
         }
 
         // Add digital input parameters
@@ -374,16 +374,16 @@ impl DeviceData for AioModuleData {
         
         params.insert("baud_rate".to_string(), self.baud_rate as f32);
 
-        // Add channel parameters as floats
-        for channel in &self.channels {
+        // Add RPM channel parameters as floats
+        for channel in &self.rpm_channels {
             let ch_prefix = format!("ch{}", channel.channel_id);
-            params.insert(format!("{}_pulse", ch_prefix), channel.pulse_count as f32);
-            params.insert(format!("{}_threshold", ch_prefix), channel.threshold as f32);
-            params.insert(format!("{}_frequency", ch_prefix), channel.frequency as f32);
+            params.insert(format!("{}_gear_pulse", ch_prefix), channel.gear_pulse_count as f32);
+            params.insert(format!("{}_threshold", ch_prefix), channel.rpm_threshold as f32);
+            params.insert(format!("{}_frequency", ch_prefix), channel.frequency_hz as f32);
             params.insert(format!("{}_rpm", ch_prefix), channel.rpm_value as f32);
-            params.insert(format!("{}_average", ch_prefix), channel.average_value as f32);
-            params.insert(format!("{}_duration_rpm", ch_prefix), channel.duration_rpm as f32);
-            params.insert(format!("{}_duration_ae", ch_prefix), channel.duration_ae as f32);
+            params.insert(format!("{}_average", ch_prefix), channel.rpm_average as f32);
+            params.insert(format!("{}_duration_rpm", ch_prefix), channel.duration_rpm_minutes as f32);
+            params.insert(format!("{}_duration_ae", ch_prefix), channel.duration_ae_minutes as f32);
         }
 
         // Add digital inputs as floats (0.0 or 1.0)

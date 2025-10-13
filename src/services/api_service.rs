@@ -532,7 +532,7 @@ async fn get_recent_aio_module_readings(
                     "device_address": reading.device_address,
                     "unix_timestamp": reading.unix_timestamp,
                     "baud_rate": reading.baud_rate,
-                    "channels": reading.get_channels().unwrap_or_default(),
+                    "rpm_channels": reading.get_rpm_channels().unwrap_or_default(),
                     "digital_inputs": (0..16).map(|i| reading.get_digital_input(i + 1)).collect::<Vec<bool>>(),
                     "created_at": reading.created_at
                 })
@@ -583,7 +583,7 @@ async fn get_aio_module_readings_by_address(
                     "device_address": reading.device_address,
                     "unix_timestamp": reading.unix_timestamp,
                     "baud_rate": reading.baud_rate,
-                    "channels": reading.get_channels().unwrap_or_default(),
+                    "rpm_channels": reading.get_rpm_channels().unwrap_or_default(),
                     "digital_inputs": (0..16).map(|i| reading.get_digital_input(i + 1)).collect::<Vec<bool>>(),
                     "created_at": reading.created_at
                 })
