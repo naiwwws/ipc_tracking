@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::any::Any;
 use std::collections::HashMap;
+use std::hash::Hash;
+
 
 use crate::devices::traits::{Device, DeviceData};
 use crate::modbus::client::ModbusClientTrait;
@@ -85,7 +87,7 @@ impl AioModuleDevice {
         self
     }
 
-    fn parse_modbus_response(&self, raw_data: &[u8]) -> Result<AioModuleData, ModbusError> {
+    fn parse_modbus_response(&self, raw_data: &[u8]) -> Result<AioModuleData, ModbusError> { //default &self and not &mut self
         // Expected 78 bytes for 39 registers (39 * 2 = 78 bytes)
         if raw_data.len() < 78 {
             return Err(ModbusError::InvalidData(format!(
@@ -163,7 +165,8 @@ impl AioModuleDevice {
 
         // DIN_STATE: dinTmp = arg[43] << 8 | arg[44] -> raw_data[42] << 8 | raw_data[43]
         let din_word = ((raw_data[42] as u16) << 8) | (raw_data[43] as u16);
-        
+
+
         // Parse digital inputs exactly as Lua: (dinTmp >> j) & 0x1
         let mut digital_inputs = Vec::new();
         for j in 0..16 {

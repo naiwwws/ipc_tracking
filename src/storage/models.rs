@@ -101,6 +101,9 @@ pub struct MtwsPayload {
     pub fields: Vec<MtwsField>,
     #[serde(rename = "MIN")]
     pub min: u16,
+
+    #[serde(skip)]
+    pub raw_data: Vec<u8>,
 }
 
 // MINIMAL: Constructor for FlowmeterReading
@@ -138,11 +141,16 @@ impl MtwsPayload {
             is_forward: false,
             fields: Vec::new(),
             min: 1,
+            raw_data: Vec::new(),
         }
     }
     
     pub fn add_field(&mut self, name: String, value: String) {
         self.fields.push(MtwsField { name, value });
+    }
+
+    pub fn add_raw_field<const N: usize>(&mut self, values: [u8; N]) {
+        self.raw_data.extend_from_slice(&values);
     }
 }
 

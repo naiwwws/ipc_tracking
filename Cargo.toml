@@ -95,6 +95,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"
 actix-web = { version = "4.4", default-features = false, features = ["macros", "compress-gzip"],optional = true }
 reqwest = { version = "0.11", features = ["json"] }
 openssl = { version = "0.10.73", features = ["vendored"] }
+serde_cbor = "0.11.2"
 
 # NEW: Smaller alternatives for embedded use
 [target.'cfg(target_arch = "arm")'.dependencies]
