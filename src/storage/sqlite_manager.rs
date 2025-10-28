@@ -208,7 +208,6 @@ impl SqliteManager {
             CREATE TABLE IF NOT EXISTS aio_module_readings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_address INTEGER NOT NULL,
-                unix_timestamp INTEGER NOT NULL,
                 baud_rate INTEGER NOT NULL,
                 channels_data TEXT NOT NULL,
                 digital_inputs INTEGER NOT NULL,
@@ -565,12 +564,11 @@ impl SqliteManager {
     pub async fn store_aio_module_reading(&self, reading: &AioModuleReading) -> Result<(), ModbusError> {
         sqlx::query(r#"
             INSERT INTO aio_module_readings (
-                device_address, unix_timestamp, baud_rate, 
+                device_address, baud_rate, 
                 channels_data, digital_inputs, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?)
         "#)
         .bind(reading.device_address)
-        .bind(reading.unix_timestamp)
         .bind(reading.baud_rate)
         .bind(&reading.channels_data)
         .bind(reading.digital_inputs)
@@ -584,10 +582,10 @@ impl SqliteManager {
 
     pub async fn get_recent_aio_module_readings(&self, limit: i64) -> Result<Vec<AioModuleReading>, ModbusError> {
         let readings = sqlx::query_as::<_, AioModuleReading>(r#"
-            SELECT id, device_address, unix_timestamp, baud_rate, 
+            SELECT id, device_address, baud_rate, 
                    channels_data, digital_inputs, created_at
             FROM aio_module_readings 
-            ORDER BY unix_timestamp DESC 
+            ORDER BY created_at DESC
             LIMIT ?
         "#)
         .bind(limit)
@@ -605,11 +603,11 @@ impl SqliteManager {
         end_time: i64,
     ) -> Result<Vec<AioModuleReading>, ModbusError> {
         let readings = sqlx::query_as::<_, AioModuleReading>(r#"
-            SELECT id, device_address, unix_timestamp, baud_rate, 
+            SELECT id, device_address, baud_rate, 
                    channels_data, digital_inputs, created_at
             FROM aio_module_readings 
-            WHERE device_address = ? AND unix_timestamp BETWEEN ? AND ?
-            ORDER BY unix_timestamp ASC
+            WHERE device_address = ? AND created_at BETWEEN ? AND ?
+            ORDER BY created_at ASC
         "#)
         .bind(device_address)
         .bind(start_time)
