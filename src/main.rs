@@ -8,7 +8,6 @@ mod output;
 mod storage;
 
 use anyhow::Result;
-use clap::{Arg, Command, ArgAction}; // Add ArgMatches here
 use log::{info, warn};
 
 use services::DataService;
@@ -18,501 +17,19 @@ use services::ApiService;
 use crate::services::api_service::ApiServiceState;
 use config::{Config, DynamicConfigManager};
 use ipc_tracking::{VERSION};
-use cli::commands::{handle_subcommands};
-
-fn build_cli() -> Command {
-    Command::new("ipc_tracking")
-        .version(VERSION)
-        .about("Modular Industrial Device Communication Service")
-        .arg(
-            Arg::new("config-file")
-                .long("config-file")
-                .short('c')
-                .value_name("FILE")
-                .help("Configuration file path")
-                .default_value("setup/default.toml"),
-        )
-        .arg(
-            Arg::new("port")
-                .short('p')
-                .long("port")
-                .value_name("PORT")
-                .help("Serial port path")
-                .default_value("/dev/ttyS0"),
-        )
-        .arg(
-            Arg::new("baud")
-                .short('b')
-                .long("baud")
-                .value_name("BAUD")
-                .help("Baud rate")
-                .default_value("9600"),
-        )
-        .arg(
-            Arg::new("devices")
-                .short('d')
-                .long("devices")
-                .value_name("DEVICES")
-                .help("Device addresses (comma-separated)")
-                .default_value("2,3"),
-        )
-        .arg(
-            Arg::new("interval")
-                .short('i')
-                .long("interval")
-                .value_name("SECONDS")
-                .help("Update interval in seconds")
-                .default_value("10"),
-        )
-        .arg(
-            Arg::new("debug")
-                .long("debug")
-                .short('D')
-                .help("Enable debug mode with automatic data printing")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("format")
-                .long("format")
-                .value_name("FORMAT")
-                .help("Output format: console, json, csv, hex")
-                .value_parser(["console", "json", "csv", "hex"])
-                .default_value("console"),
-        )
-        .arg(
-            Arg::new("output-file")
-                .long("output-file")
-                .value_name("FILE")
-                .help("Write output to file"),
-        )
-        .arg(
-            Arg::new("output-http")
-                .long("output-http")
-                .value_name("URL")
-                .help("Send output to HTTP endpoint"),
-        )
-        .arg(
-            Arg::new("output-db")
-                .long("output-db")
-                .value_name("CONNECTION")
-                .help("Send output to database"),
-        )
-        .arg(
-            Arg::new("output-mqtt")
-                .long("output-mqtt")
-                .value_name("BROKER,TOPIC")
-                .help("Send output to MQTT broker (format: broker_url,topic)"),
-        )
-        .arg(
-            Arg::new("socket-port")
-                .long("socket-port")
-                .value_name("PORT")
-                .help("Enable socket server on specified port (default: 8080)"),
-        )
-        .arg(
-            Arg::new("socket")
-                .long("socket")
-                .action(clap::ArgAction::SetTrue)
-                .help("Enable socket server on default port (8080)"),
-        )
-        .arg(
-            Arg::new("websocket")
-                .long("websocket")
-                .action(clap::ArgAction::SetTrue)
-                .help("Enable WebSocket server on default port (8080)"),
-        )
-        .arg(
-            Arg::new("websocket-port")
-                .long("websocket-port")
-                .value_name("PORT")
-                .help("Enable WebSocket server on specified port"),
-        )
-        .arg(
-            Arg::new("disable-socket")
-                .long("disable-socket")
-                .action(clap::ArgAction::SetTrue)
-                .help("Disable all socket/websocket servers"),
-        )
-        .arg(
-            Arg::new("api-port")
-                .long("api-port")
-                .value_name("PORT")
-                .help("Enable HTTP API server on specified port (default: 3000)"),
-        )
-        .arg(
-            Arg::new("api")
-                .long("api")
-                .action(clap::ArgAction::SetTrue)
-                .help("Enable HTTP API server on default port (3000)"),
-        )
-        .subcommand(
-            Command::new("getdata")
-                .about("Get all device data")
-        )
-        .subcommand(
-            Command::new("getvolatile")
-                .about("Get volatile data for specific parameter")
-                .arg(
-                    Arg::new("parameter")
-                        .help("Parameter name")
-                        .required(true)
-                        .index(1),
-                )
-        )
-        .subcommand(
-            Command::new("resetaccumulation")
-                .about("Reset accumulation for a device")
-                .arg(
-                    Arg::new("device_address")
-                        .help("Device address to reset")
-                        .required(true)
-                        .index(1),
-                ),
-        )
-        .subcommand(
-            Command::new("config")
-                .about("Configuration management")
-                .subcommand(
-                    Command::new("show")
-                        .about("Show current configuration")
-                )
-                .subcommand(
-                    Command::new("ipc")
-                        .about("IPC configuration management")
-                        .subcommand(
-                            Command::new("set-name")
-                                .about("Set IPC name")
-                                .arg(Arg::new("name").help("IPC name").required(true).index(1))
-                                .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                        )
-                        .subcommand(
-                            Command::new("regenerate-uuid")
-                                .about("Generate new UUID for this IPC")
-                        )
-                )
-                .subcommand(
-                    Command::new("set-interval")
-                        .about("Set polling interval")
-                        .arg(Arg::new("seconds").help("Polling interval in seconds").required(true).index(1))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("set")
-                        .about("Set configuration parameter")
-                        .arg(Arg::new("target").help("Target (serial, device:ADDRESS, monitoring, site)").required(true).index(1))
-                        .arg(Arg::new("key").help("Parameter key").required(true).index(2))
-                        .arg(Arg::new("value").help("Parameter value").required(true).index(3))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("add")
-                        .about("Add new device")
-                        .arg(Arg::new("type")
-                            .long("type")
-                            .short('t')
-                            .value_name("TYPE")
-                            .help("Device type (flowmeter, rpm, gps, aio)")
-                            .required(true))
-                        .arg(Arg::new("address")
-                            .long("address")
-                            .short('a')
-                            .value_name("ADDRESS")
-                            .help("Device Modbus address (1-255)")
-                            .required(true))
-                        .arg(Arg::new("name")
-                            .long("name")
-                            .short('n')
-                            .value_name("NAME")
-                            .help("Device name")
-                            .required(true))
-                        .arg(Arg::new("location")
-                            .long("location")
-                            .short('l')
-                            .value_name("LOCATION")
-                            .help("Device location")
-                            .default_value("Unknown"))
-                        // RPM-specific arguments
-                        .arg(Arg::new("channels")
-                            .long("channels")
-                            .short('c')
-                            .value_name("COUNT")
-                            .help("Number of RPM channels (1-8) - only for RPM devices"))
-                        .arg(Arg::new("thresholds")
-                            .long("thresholds")
-                            .value_name("THRESHOLDS")
-                            .help("Comma-separated RPM thresholds for each channel")
-                            .value_delimiter(','))
-                        .arg(Arg::new("engine-types")
-                            .long("engine-types")
-                            .value_name("TYPES")
-                            .help("Comma-separated engine types for each channel")
-                            .value_delimiter(','))
-                        .arg(Arg::new("auto-detect")
-                            .long("auto-detect")
-                            .help("Enable auto-detection of channels (RPM only)")
-                            .action(ArgAction::SetTrue))
-                        // AIO-specific arguments
-                        .arg(Arg::new("analog-channels")
-                            .long("analog-channels")
-                            .value_name("COUNT")
-                            .help("Number of analog input channels (1-8) - only for AIO devices"))
-                        .arg(Arg::new("digital-inputs")
-                            .long("digital-inputs")
-                            .value_name("COUNT")
-                            .help("Number of digital input channels (1-16) - only for AIO devices")
-                            .default_value("16"))
-                        .arg(Arg::new("channel-types")
-                            .long("channel-types")
-                            .value_name("TYPES")
-                            .help("Comma-separated channel types (rpm,pulse,frequency) for each analog channel")
-                            .value_delimiter(','))
-                        .arg(Arg::new("aio-thresholds")
-                            .long("aio-thresholds")
-                            .value_name("THRESHOLDS")
-                            .help("Comma-separated RPM thresholds for AIO channels (only for RPM type channels)")
-                            .value_delimiter(','))
-                        .arg(Arg::new("auto-detect-aio")
-                            .long("auto-detect-aio")
-                            .help("Enable auto-detection of AIO channel types")
-                            .action(ArgAction::SetTrue))
-                )
-                .subcommand(
-                    Command::new("enable")
-                        .about("Enable device")
-                        .arg(Arg::new("address").help("Device address").required(true).index(1))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("disable")
-                        .about("Disable device")
-                        .arg(Arg::new("address").help("Device address").required(true).index(1))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("remove")
-                        .about("Remove device")
-                        .arg(Arg::new("address").help("Device address").required(true).index(1))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("backup")
-                        .about("Backup configuration")
-                        .arg(Arg::new("name").long("name").help("Backup name"))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("restore")
-                        .about("Restore configuration")
-                        .arg(Arg::new("name").help("Backup name").required(true).index(1))
-                        .arg(Arg::new("operator").long("operator").help("Operator name").default_value("CLI"))
-                )
-                .subcommand(
-                    Command::new("reset")
-                        .about("Reset configuration to defaults")
-                )
-                .subcommand(
-                    Command::new("rpm")
-                        .about("RPM device management")
-                        .subcommand(
-                            Command::new("register")
-                                .about("Register new RPM device")
-                                .arg(Arg::new("address").long("address").required(true))
-                                .arg(Arg::new("name").long("name").required(true))
-                                .arg(Arg::new("location").long("location").default_value("Unknown"))
-                                .arg(Arg::new("channels").long("channels").required(true))
-                                .arg(Arg::new("thresholds").long("thresholds").value_delimiter(','))
-                                .arg(Arg::new("engine-types").long("engine-types").value_delimiter(','))
-                                .arg(Arg::new("auto-detect").long("auto-detect").action(ArgAction::SetTrue))
-                        )
-                        .subcommand(
-                            Command::new("update")
-                                .about("Update RPM device")
-                                .arg(Arg::new("address").long("address").required(true))
-                                .arg(Arg::new("channel").long("channel"))
-                                .arg(Arg::new("threshold").long("threshold"))
-                                .arg(Arg::new("engine-type").long("engine-type"))
-                        )
-                )
-        )
-        .subcommand(
-            Command::new("db")
-                .about("Database operations")
-                .subcommand(Command::new("init").about("Initialize database"))
-                .subcommand(Command::new("stats").about("Show database statistics"))
-                .subcommand(Command::new("query").about("Query database")
-                    .arg(Arg::new("table").short('t').long("table").help("Table name").default_value("device_readings"))
-                    .arg(Arg::new("limit").short('l').long("limit").help("Limit results").default_value("10"))
-                    .arg(Arg::new("device").short('d').long("device").help("Device address filter"))
-                )
-                .subcommand(Command::new("schema").about("Show database schema"))
-        )
-        .subcommand(
-            Command::new("websocket")
-                .about("WebSocket server management")
-                .subcommand(Command::new("status").about("Show WebSocket server status"))
-                .subcommand(Command::new("clients").about("Show connected WebSocket clients"))
-        )
-        .subcommand(
-            Command::new("gps")
-                .about("GPS location and tracking commands")
-                .subcommand(
-                    Command::new("start")
-                        .about("Start GPS service")
-                )
-                .subcommand(
-                    Command::new("stop")
-                        .about("Stop GPS service")
-                )
-                .subcommand(
-                    Command::new("status")
-                        .about("Show GPS service status")
-                )
-                .subcommand(
-                    Command::new("data")
-                        .about("Show current GPS data and location")
-                )
-                .subcommand(
-                    Command::new("test")
-                        .about("Test GPS connection and wait for fix")
-                )
-        )
-        .subcommand(
-            Command::new("mtws")
-                .about("MTWS (Marine Transport and Warehouse System) operations")
-                .subcommand(
-                    Command::new("config")
-                        .about("Configure MTWS settings")
-                        .arg(Arg::new("imei")
-                            .long("imei")
-                            .help("Device IMEI (15 digits)")
-                            .value_name("IMEI"))
-                        .arg(Arg::new("endpoint")
-                            .long("endpoint")
-                            .help("Base endpoint URL (without IMEI)")
-                            .value_name("URL"))
-                        .arg(Arg::new("interval")
-                            .long("interval")
-                            .help("Transmission interval in seconds (minimum 1)")
-                            .value_name("SECONDS"))
-                        .arg(Arg::new("auto-start")  // Add this missing argument
-                            .long("auto-start")
-                            .help("Enable/disable auto-start (true/false, yes/no, 1/0, on/off)")
-                            .value_name("BOOL"))
-                )
-                .subcommand(
-                    Command::new("start")
-                        .about("Start automatic MTWS transmission")
-                )
-                .subcommand(
-                    Command::new("stop")
-                        .about("Stop automatic MTWS transmission")
-                )
-                .subcommand(
-                    Command::new("send")
-                        .about("Send MTWS data immediately (one-time)")
-                )
-                .subcommand(
-                    Command::new("test")
-                        .about("Test MTWS endpoint connectivity")
-                )
-                .subcommand(
-                    Command::new("status")
-                        .about("Show MTWS service status and configuration")
-                )
-                .subcommand(
-                    Command::new("enable")
-                        .about("Enable MTWS service")
-                )
-                .subcommand(
-                    Command::new("disable")
-                        .about("Disable MTWS service")
-                )
-        )
-        // Add missing subcommands:
-        .subcommand(
-            Command::new("getrawdata")
-                .about("Get raw data from device")
-                .arg(Arg::new("device")
-                    .help("Device address")
-                    .required(true)
-                    .index(1))
-                .arg(Arg::new("format")
-                    .long("format")
-                    .help("Output format")
-                    .value_parser(["hex", "raw", "json"])
-                    .default_value("hex"))
-                .arg(Arg::new("output")
-                    .long("output")
-                    .help("Output file path")
-                    .value_name("FILE"))
-        )
-        .subcommand(
-            Command::new("flowmeter")
-                .about("Flowmeter device operations")
-                .subcommand(
-                    Command::new("query")
-                        .about("Query flowmeter data")
-                        .arg(Arg::new("device")
-                            .help("Device address")
-                            .required(true)
-                            .index(1))
-                        .arg(Arg::new("limit")
-                            .help("Number of records")
-                            .default_value("10"))
-                )
-                .subcommand(
-                    Command::new("stats")
-                        .about("Show flowmeter statistics")
-                )
-                .subcommand(
-                    Command::new("recent")
-                        .about("Show recent flowmeter readings")
-                        .arg(Arg::new("limit")
-                            .help("Number of records")
-                            .default_value("20"))
-                )
-        )
-        .subcommand(
-            Command::new("rpm")
-                .about("RPM device operations")
-                .subcommand(
-                    Command::new("read")
-                        .about("Read RPM device data")
-                        .arg(Arg::new("address")
-                            .help("Device address")
-                            .required(true))
-                        .arg(Arg::new("channel")
-                            .help("Specific channel (optional)")
-                            .long("channel"))
-                )
-                .subcommand(
-                    Command::new("status")
-                        .about("Show RPM device status")
-                )
-        )
-        .subcommand(
-            Command::new("engine")
-                .about("Engine management commands")
-                .subcommand(
-                    Command::new("duration")
-                        .about("Engine duration commands")
-                        .subcommand(
-                            Command::new("reset")
-                                .about("Reset engine duration")
-                                .arg(Arg::new("address")
-                                    .help("Engine address")
-                                    .required(true))
-                        )
-                )
-        )
-}
-
+use cli::{CliBuilder, commands::{handle_subcommands}};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+async fn main() -> Result<()> {
+    // Initialize logger with better formatting
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
-    let matches = build_cli().get_matches(); 
+    info!("🚀 IPC Tracking System v{}", VERSION);
+    info!("📂 Working directory: {:?}", std::env::current_dir().unwrap_or_default());
+
+    let matches = CliBuilder::build_complete().get_matches(); 
 
     // Handle config commands FIRST, before creating the service
     if let Some(config_matches) = matches.subcommand_matches("config") {
@@ -531,20 +48,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config_manager = DynamicConfigManager::new(config_file, backup_dir)?;
         
         // Handle config commands
-        let handled = crate::config::config_commands::handle_config_commands(config_matches, &config_manager).await?;
+        let handled = crate::config::config_commands::handle_config_commands(config_matches, &config_manager).await
+            .map_err(|e| anyhow::anyhow!("Config command error: {}", e))?;
         
         if handled {
             return Ok(());
         }
     }
 
-    // ✅ ENHANCED: Config loading with proper TOML precedence
+    // ✅ ENHANCED: Config loading with proper path handling
     let config_file = matches.get_one::<String>("config-file").unwrap();
     
-    info!("🔍 Loading configuration from: {}", config_file);
+    // Convert to PathBuf for better handling
+    let config_path = std::path::PathBuf::from(config_file);
+    let config_path_canonical = if config_path.is_absolute() {
+        config_path.clone()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(&config_path)
+    };
     
-    let config = if std::path::Path::new(config_file).exists() {
-        info!("📁 Loading config from existing file: {}", config_file);
+    info!("🔍 Loading configuration from: {}", config_path_canonical.display());
+    
+    let config = if config_path_canonical.exists() {
+        info!("📁 Config file found: {}", config_path_canonical.display());
+        
+        // Check file permissions
+        match std::fs::metadata(&config_path_canonical) {
+            Ok(metadata) => {
+                info!("� Config file size: {} bytes", metadata.len());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    info!("🔒 Config permissions: {:o}", metadata.permissions().mode());
+                }
+            }
+            Err(e) => {
+                warn!("⚠️  Could not read config metadata: {}", e);
+            }
+        }
+        
         match Config::from_file(config_file) {
             Ok(mut config) => {
                 info!("✅ Successfully loaded TOML config");
@@ -589,21 +133,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             Err(e) => {
                 eprintln!("❌ Failed to load config file: {}", e);
+                eprintln!("📂 Tried path: {}", config_path_canonical.display());
+                eprintln!("📂 Working directory: {:?}", std::env::current_dir().unwrap_or_default());
+                
+                // Check if directory exists
+                if let Some(parent) = config_path_canonical.parent() {
+                    if !parent.exists() {
+                        eprintln!("❌ Config directory does not exist: {}", parent.display());
+                    }
+                }
+                
                 info!("🔄 Using default configuration and saving it");
                 let default_config = Config::default();
                 
+                // Ensure directory exists before saving
+                if let Some(parent) = config_path_canonical.parent() {
+                    if let Err(dir_err) = std::fs::create_dir_all(parent) {
+                        warn!("⚠️  Could not create config directory: {}", dir_err);
+                    }
+                }
+                
                 // Try to save default config
                 if let Err(save_err) = default_config.save_to_file(config_file) {
-                    info!("⚠️  Failed to save default config: {}", save_err);
+                    warn!("⚠️  Failed to save default config: {}", save_err);
                 } else {
-                    info!("💾 Saved default config to: {}", config_file);
+                    info!("💾 Saved default config to: {}", config_path_canonical.display());
                 }
                 
                 default_config
             }
         }
     } else {
-        info!("📁 Config file not found, creating from CLI args and defaults");
+        info!("📁 Config file not found at: {}", config_path_canonical.display());
+        info!("📁 Creating from CLI args and defaults");
+        
+        // Check if directory exists
+        if let Some(parent) = config_path_canonical.parent() {
+            if !parent.exists() {
+                info!("📁 Creating config directory: {}", parent.display());
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    warn!("⚠️  Failed to create directory: {}", e);
+                }
+            }
+        }
+        
         let config = match Config::from_matches(&matches) {
             Ok(config) => config,
             Err(e) => {
@@ -615,9 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // Save the config file for future use
         if let Err(e) = config.save_to_file(config_file) {
-            info!("⚠️  Failed to save initial config file: {}", e);
+            warn!("⚠️  Failed to save initial config file: {}", e);
+            warn!("⚠️  Check directory permissions: {:?}", config_path_canonical.parent());
         } else {
-            info!("💾 Created initial config file: {}", config_file);
+            info!("💾 Created initial config file: {}", config_path_canonical.display());
         }
         
         config
@@ -745,6 +319,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if debug_mode {
         info!("🐛 Debug mode enabled - additional data output will be shown");
     }
+    
+    // Check if FSM mode is enabled
+    let fsm_mode = matches.get_flag("fsm-mode");
+    if fsm_mode {
+        info!("🎯 FSM Mode enabled - Starting with finite state machine");
+        return run_with_fsm(service, shutdown_rx, config, api_service_handle).await;
+    }
 
     // Configure output format if specified
     if let Some(format) = matches.get_one::<String>("format") {
@@ -815,4 +396,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("✅ All services stopped gracefully");
     Ok(())
+}
+
+/// Run the system with FSM mode
+#[cfg(feature = "api")]
+async fn run_with_fsm(
+    service: DataService,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    config: Config,
+    api_service_handle: Option<ApiService>,
+) -> Result<()> {
+    use std::sync::Arc;
+    use utils::state_machine::SystemStateMachine;
+    use utils::state_handlers::run_state_machine;
+    
+    info!("🎯 Starting system with Finite State Machine");
+    info!("📋 FSM will ensure proper initialization sequence:");
+    info!("   1. Initialize system");
+    info!("   2. Read all device data");
+    info!("   3. Read GPS data");
+    info!("   4. Test connections");
+    info!("   5. Enter operational mode");
+    
+    // Create FSM with max retries from config
+    let max_retries = config.max_retries;
+    let fsm = Arc::new(SystemStateMachine::new(max_retries));
+    let service_arc = Arc::new(service);
+    
+    // Run the FSM
+    let fsm_result = run_state_machine(fsm.clone(), service_arc.clone(), shutdown_rx).await;
+    
+    // Cleanup
+    info!("🔄 Shutting down FSM services...");
+    
+    #[cfg(feature = "api")]
+    if let Some(mut api_service) = api_service_handle {
+        info!("🛑 Stopping API service...");
+        if let Err(e) = api_service.stop().await {
+            eprintln!("❌ Failed to stop API service: {}", e);
+        } else {
+            info!("✅ API service stopped");
+        }
+    }
+    
+    match fsm_result {
+        Ok(_) => {
+            info!("✅ FSM execution completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("❌ FSM execution failed: {}", e);
+            Err(e.into())
+        }
+    }
+}
+
+#[cfg(not(feature = "api"))]
+async fn run_with_fsm(
+    service: DataService,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    _config: Config,
+    _api_service_handle: Option<()>,
+) -> Result<()> {
+    use std::sync::Arc;
+    use utils::state_machine::SystemStateMachine;
+    use utils::state_handlers::run_state_machine;
+    
+    info!("🎯 Starting system with Finite State Machine");
+    info!("📋 FSM will ensure proper initialization sequence:");
+    info!("   1. Initialize system");
+    info!("   2. Read all device data");
+    info!("   3. Read GPS data");
+    info!("   4. Test connections");
+    info!("   5. Enter operational mode");
+    
+    // Create FSM with default max retries
+    let fsm = Arc::new(SystemStateMachine::new(3));
+    let service_arc = Arc::new(service);
+    
+    // Run the FSM
+    let fsm_result = run_state_machine(fsm.clone(), service_arc.clone(), shutdown_rx).await;
+    
+    match fsm_result {
+        Ok(_) => {
+            info!("✅ FSM execution completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("❌ FSM execution failed: {}", e);
+            Err(e.into())
+        }
+    }
 }

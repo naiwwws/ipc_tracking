@@ -38,6 +38,12 @@ pub enum ModbusError {
     
     #[error("Service not available: {0}")]
     ServiceNotAvailable(String),
+    
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+    
+    #[error("Fatal error: {0}")]
+    FatalError(String),
 }
 
 #[cfg(feature = "sqlite")]

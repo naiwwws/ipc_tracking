@@ -666,4 +666,13 @@ impl MtwsService {
         Ok(())
     }
 
+    // Trigger manual transmission (for FSM)
+    #[cfg(feature = "sqlite")]
+    pub async fn trigger_manual_transmission(&self) -> Result<(), ModbusError> {
+        info!("🛰️ Manual MTWS transmission triggered");
+        let endpoint_url = self.config.get_mtws_endpoint_url();
+        let _payload = Self::generate_and_send_payload(&self.data_service, &endpoint_url, &self.client).await?;
+        Ok(())
+    }
+
 }

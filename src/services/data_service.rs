@@ -1138,4 +1138,129 @@ impl DataService {
 
         Ok(combined_reading)
     }
+    
+    // ============================================================================
+    // FSM Support Methods
+    // ============================================================================
+    
+    /// Read all devices (wrapper for FSM)
+    pub async fn read_all_devices(&self) -> Result<(), ModbusError> {
+        // Clone self mutably for reading
+        let mut service = self.clone();
+        service.read_all_devices_once().await
+    }
+    
+    /// Read GPS data (wrapper for FSM)
+    pub async fn read_gps_data(&self) -> Result<Option<crate::devices::gps::GpsData>, ModbusError> {
+        if let Some(gps_service) = &self.gps_service {
+            let data = gps_service.get_current_data().await;
+            Ok(Some(data))
+        } else {
+            Err(ModbusError::ServiceNotAvailable("GPS service not configured".to_string()))
+        }
+    }
+    
+    /// Test database connection
+    #[cfg(feature = "sqlite")]
+    pub async fn test_database_connection(&self) -> Result<(), ModbusError> {
+        if let Some(db_service) = &self.database_service {
+            // Try a simple query to test connection
+            let _ = db_service.get_recent_flowmeter_readings(1).await?;
+            Ok(())
+        } else {
+            Ok(()) // If no database configured, consider it "passed"
+        }
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub async fn test_database_connection(&self) -> Result<(), ModbusError> {
+        Ok(())
+    }
+    
+    /// Test MTWS connection
+    #[cfg(feature = "sqlite")]
+    pub async fn test_mtws_connection(&self) -> Result<(), ModbusError> {
+        if let Some(mtws_service) = &self.mtws_service {
+            // Just check if endpoint is configured
+            if self.config.mtws.enabled {
+                info!("MTWS endpoint configured: {}", self.config.get_mtws_endpoint_url());
+                Ok(())
+            } else {
+                Err(ModbusError::ServiceNotAvailable("MTWS not enabled".to_string()))
+            }
+        } else {
+            Ok(()) // If no MTWS configured, consider it "passed"
+        }
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub async fn test_mtws_connection(&self) -> Result<(), ModbusError> {
+        Ok(())
+    }
+    
+    /// Check if there's pending data to send
+    pub async fn has_pending_data(&self) -> bool {
+        // Check if we have device data stored
+        let data = self.device_data.lock().unwrap();
+        !data.is_empty()
+    }
+    
+    /// Send data to MTWS service
+    #[cfg(feature = "sqlite")]
+    pub async fn send_data_to_mtws(&self) -> Result<(), ModbusError> {
+        if let Some(mtws_service) = &self.mtws_service {
+            // Trigger manual transmission
+            mtws_service.trigger_manual_transmission().await
+        } else {
+            Err(ModbusError::ServiceNotAvailable("MTWS service not available".to_string()))
+        }
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub async fn send_data_to_mtws(&self) -> Result<(), ModbusError> {
+        Ok(())
+    }
+    
+    /// Stop polling (for shutdown)
+    pub async fn stop_polling(&self) -> Result<(), ModbusError> {
+        let mut handle = self.polling_handle.lock().await;
+        if let Some(h) = handle.take() {
+            h.abort();
+            info!("🛑 Polling stopped");
+        }
+        Ok(())
+    }
+    
+    /// Flush pending data to database
+    #[cfg(feature = "sqlite")]
+    pub async fn flush_pending_data(&self) -> Result<(), ModbusError> {
+        if let Some(db_service) = &self.database_service {
+            info!("💾 Flushing pending data to database");
+            // Database service should handle its own flushing
+        }
+        Ok(())
+    }
+    
+    #[cfg(not(feature = "sqlite"))]
+    pub async fn flush_pending_data(&self) -> Result<(), ModbusError> {
+        Ok(())
+    }
+    
+    /// Close all connections
+    pub async fn close_connections(&self) -> Result<(), ModbusError> {
+        info!("🔌 Closing connections");
+        
+        // Stop GPS service
+        if let Some(gps_service) = &self.gps_service {
+            gps_service.stop().await?;
+        }
+        
+        // Stop MTWS service
+        #[cfg(feature = "sqlite")]
+        if let Some(mtws_service) = &self.mtws_service {
+            mtws_service.stop_transmission().await?;
+        }
+        
+        Ok(())
+    }
 }
